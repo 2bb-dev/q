@@ -66,8 +66,38 @@ fn reduce_queue(app: &mut App, input: Input) -> Option<Effect> {
     }
 }
 
-fn reduce_composer(_app: &mut App, _input: Input) -> Option<Effect> {
-    None
+fn reduce_composer(app: &mut App, input: Input) -> Option<Effect> {
+    match input {
+        Input::Char(c) => {
+            app.composer.push(c);
+            None
+        }
+        Input::Enter => {
+            app.composer.push('\n');
+            None
+        }
+        Input::Backspace => {
+            app.composer.pop();
+            None
+        }
+        Input::CtrlS => {
+            let text = app.composer.trim().to_string();
+            if text.is_empty() {
+                return None;
+            }
+            app.queue.add_text(text).ok()?;
+            app.composer.clear();
+            let len = app.visible_prompts().len();
+            app.selected = Some(len.saturating_sub(1));
+            app.focus = Pane::Queue;
+            Some(Effect::Persist)
+        }
+        Input::Esc => {
+            app.focus = Pane::Queue;
+            None
+        }
+        _ => None,
+    }
 }
 
 fn reclamp_selection(app: &mut App) {
@@ -201,5 +231,55 @@ mod tests {
         reduce(&mut app, Input::Char('e'));
         assert_eq!(app.composer, text);
         assert_eq!(app.focus, Pane::Composer);
+    }
+
+    #[test]
+    fn composer_chars_append() {
+        let mut app = app_with(0);
+        app.focus = Pane::Composer;
+        reduce(&mut app, Input::Char('h'));
+        reduce(&mut app, Input::Char('i'));
+        assert_eq!(app.composer, "hi");
+    }
+
+    #[test]
+    fn composer_enter_inserts_newline() {
+        let mut app = app_with(0);
+        app.focus = Pane::Composer;
+        reduce(&mut app, Input::Char('a'));
+        reduce(&mut app, Input::Enter);
+        reduce(&mut app, Input::Char('b'));
+        assert_eq!(app.composer, "a\nb");
+    }
+
+    #[test]
+    fn composer_backspace_pops_last_char() {
+        let mut app = app_with(0);
+        app.focus = Pane::Composer;
+        reduce(&mut app, Input::Char('a'));
+        reduce(&mut app, Input::Char('b'));
+        reduce(&mut app, Input::Backspace);
+        assert_eq!(app.composer, "a");
+    }
+
+    #[test]
+    fn ctrl_s_adds_prompt_and_clears_composer() {
+        let mut app = app_with(0);
+        app.focus = Pane::Composer;
+        app.composer = "new prompt".to_string();
+        let effect = reduce(&mut app, Input::CtrlS);
+        assert_eq!(effect, Some(Effect::Persist));
+        assert_eq!(app.composer, "");
+        assert_eq!(app.visible_prompts().len(), 1);
+        assert_eq!(app.visible_prompts()[0].text, "new prompt");
+        assert_eq!(app.focus, Pane::Queue);
+    }
+
+    #[test]
+    fn ctrl_s_on_empty_composer_is_noop() {
+        let mut app = app_with(0);
+        app.focus = Pane::Composer;
+        let effect = reduce(&mut app, Input::CtrlS);
+        assert_eq!(effect, None);
     }
 }
