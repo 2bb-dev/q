@@ -66,18 +66,18 @@ pub async fn run_openai_compatible_upgrade(
         .json(&body)
         .send()
         .await
-        .map_err(|e| format!("Request failed: {}", e))?;
+        .map_err(|e| format!("Request failed: {e}"))?;
 
     if !resp.status().is_success() {
         let status = resp.status();
         let text = resp.text().await.unwrap_or_default();
-        return Err(format!("API error {}: {}", status, text));
+        return Err(format!("API error {status}: {text}"));
     }
 
     let chat: ChatResponse = resp
         .json()
         .await
-        .map_err(|e| format!("Failed to parse response: {}", e))?;
+        .map_err(|e| format!("Failed to parse response: {e}"))?;
 
     chat.choices
         .first()
@@ -111,18 +111,18 @@ pub async fn run_anthropic_upgrade(
         .json(&body)
         .send()
         .await
-        .map_err(|e| format!("Request failed: {}", e))?;
+        .map_err(|e| format!("Request failed: {e}"))?;
 
     if !resp.status().is_success() {
         let status = resp.status();
         let text = resp.text().await.unwrap_or_default();
-        return Err(format!("API error {}: {}", status, text));
+        return Err(format!("API error {status}: {text}"));
     }
 
     let message: AnthropicMessageResponse = resp
         .json()
         .await
-        .map_err(|e| format!("Failed to parse response: {}", e))?;
+        .map_err(|e| format!("Failed to parse response: {e}"))?;
 
     message
         .content
