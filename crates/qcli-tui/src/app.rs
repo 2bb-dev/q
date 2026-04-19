@@ -14,10 +14,7 @@ pub enum Input {
     Tab,
     Up,
     Down,
-    ShiftUp,
-    ShiftDown,
     CtrlS,
-    CtrlU,
     Esc,
     Quit,
 }
@@ -40,11 +37,11 @@ pub struct App {
 
 impl App {
     pub fn new(queue: Queue) -> Self {
-        let selected = if queue.is_empty() { None } else { Some(0) };
+        let empty = queue.is_empty();
         Self {
+            focus: if empty { Pane::Composer } else { Pane::Queue },
+            selected: if empty { None } else { Some(0) },
             queue,
-            focus: Pane::Queue,
-            selected,
             composer: String::new(),
             status: String::new(),
         }

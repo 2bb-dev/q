@@ -3,11 +3,9 @@ use crate::reducer::reduce;
 use crate::render::draw;
 use anyhow::Result;
 use crossterm::{
-    event::{
-        self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyModifiers,
-    },
+    event::{self, Event, KeyCode, KeyEvent, KeyModifiers},
     execute,
-    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+    terminal::{disable_raw_mode, enable_raw_mode, Clear, ClearType},
 };
 use qcli_core::Queue;
 use qcli_platform::clipboard::{Clipboard, SystemClipboard};
@@ -15,7 +13,7 @@ use qcli_platform::lock::FileLock;
 use ratatui::{backend::CrosstermBackend, Terminal};
 use std::io::{self, Stdout};
 use std::path::Path;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::Input;
 use crate::Pane;
@@ -38,9 +36,13 @@ fn event_loop(
     clipboard: &mut dyn Clipboard,
     queue_path: &Path,
 ) -> Result<()> {
+    const BLINK_PERIOD_MS: u128 = 1000;
+    const BLINK_ON_MS: u128 = 650;
+    let start = Instant::now();
     loop {
-        term.draw(|f| draw(f, app))?;
-        if !event::poll(Duration::from_millis(250))? {
+        let cursor_on = start.elapsed().as_millis() % BLINK_PERIOD_MS < BLINK_ON_MS;
+        term.draw(|f| draw(f, app, cursor_on))?;
+        if !event::poll(Duration::from_millis(120))? {
             continue;
         }
         let Event::Key(key) = event::read()? else {
@@ -81,19 +83,14 @@ fn map_key(key: KeyEvent, focus: Pane) -> Option<Input> {
         (KeyCode::Char('q'), false, false, Pane::Queue) => Input::Quit,
         (KeyCode::Char('c'), true, _, _) => Input::Quit,
         (KeyCode::Char('s'), true, _, _) => Input::CtrlS,
-        (KeyCode::Char('u'), true, _, _) => Input::CtrlU,
         (KeyCode::Tab, _, _, _) => Input::Tab,
         (KeyCode::Esc, _, _, _) => Input::Esc,
         (KeyCode::Enter, _, _, _) => Input::Enter,
         (KeyCode::Backspace, _, _, _) => Input::Backspace,
-        (KeyCode::Up, _, true, _) => Input::ShiftUp,
-        (KeyCode::Down, _, true, _) => Input::ShiftDown,
         (KeyCode::Up, _, _, _) => Input::Up,
         (KeyCode::Down, _, _, _) => Input::Down,
         (KeyCode::Char('j'), false, false, Pane::Queue) => Input::Down,
         (KeyCode::Char('k'), false, false, Pane::Queue) => Input::Up,
-        (KeyCode::Char('J'), false, _, Pane::Queue) => Input::ShiftDown,
-        (KeyCode::Char('K'), false, _, Pane::Queue) => Input::ShiftUp,
         (KeyCode::Char(c), false, _, _) => Input::Char(c),
         _ => return None,
     })
@@ -102,17 +99,16 @@ fn map_key(key: KeyEvent, focus: Pane) -> Option<Input> {
 fn setup_terminal() -> Result<Terminal<CrosstermBackend<Stdout>>> {
     enable_raw_mode()?;
     let mut out = io::stdout();
-    execute!(out, EnterAlternateScreen, EnableMouseCapture)?;
-    Ok(Terminal::new(CrosstermBackend::new(out))?)
+    execute!(out, Clear(ClearType::All))?;
+    let mut term = Terminal::new(CrosstermBackend::new(out))?;
+    term.clear()?;
+    term.hide_cursor()?;
+    Ok(term)
 }
 
 fn restore_terminal(term: &mut Terminal<CrosstermBackend<Stdout>>) -> Result<()> {
     disable_raw_mode()?;
-    execute!(
-        term.backend_mut(),
-        LeaveAlternateScreen,
-        DisableMouseCapture
-    )?;
     term.show_cursor()?;
+    execute!(term.backend_mut(), Clear(ClearType::All))?;
     Ok(())
 }

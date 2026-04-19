@@ -37,7 +37,7 @@ Launch with:
 
     q tui
 
-Three panes: queue (left), composer (top right), details (bottom right).
+Queue on top, composer underneath.
 
 ### Key bindings
 
@@ -46,10 +46,8 @@ Three panes: queue (left), composer (top right), details (bottom right).
 | `Tab` | Toggle focus between queue and composer |
 | `j` / `k` or `↓` / `↑` | Move selection (queue pane) |
 | `Enter` | Copy selected prompt; pop if unpinned |
-| `y` | Copy without popping |
 | `p` | Pin / unpin selected |
 | `e` | Edit selected (loads into composer) |
-| `J` / `K` or `Shift+↓` / `Shift+↑` | Reorder within pinned/unpinned group |
 | `Ctrl+S` | Save composer text as new prompt |
 | `Ctrl+U` | Upgrade composer via provider (requires config) |
 | `q` (queue focus) / `Ctrl+C` | Quit |
