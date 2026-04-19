@@ -3,6 +3,7 @@ pub mod copy;
 pub mod list;
 pub mod pin;
 pub mod pop;
+pub mod tui;
 
 use anyhow::Result;
 use qcli_core::{storage, Queue};
