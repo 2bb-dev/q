@@ -92,6 +92,9 @@ fn reduce_composer(app: &mut App, input: Input) -> Option<Effect> {
             app.focus = Pane::Queue;
             Some(Effect::Persist)
         }
+        Input::CtrlU => Some(Effect::Status(
+            "Upgrade not yet wired — configure providers first".to_string(),
+        )),
         Input::Esc => {
             app.focus = Pane::Queue;
             None
@@ -112,7 +115,10 @@ fn reclamp_selection(app: &mut App) {
 fn move_selection(app: &mut App, delta: i32) -> Option<Effect> {
     let prompt = app.selected_prompt()?.clone();
     if app.queue.move_within_group(prompt.id, delta).ok()? {
-        let new_idx = app.visible_prompts().iter().position(|p| p.id == prompt.id)?;
+        let new_idx = app
+            .visible_prompts()
+            .iter()
+            .position(|p| p.id == prompt.id)?;
         app.selected = Some(new_idx);
         Some(Effect::Persist)
     } else {
@@ -281,5 +287,14 @@ mod tests {
         app.focus = Pane::Composer;
         let effect = reduce(&mut app, Input::CtrlS);
         assert_eq!(effect, None);
+    }
+
+    #[test]
+    fn ctrl_u_in_composer_sets_status() {
+        let mut app = app_with(0);
+        app.focus = Pane::Composer;
+        app.composer = "hi".to_string();
+        let effect = reduce(&mut app, Input::CtrlU);
+        assert!(matches!(effect, Some(Effect::Status(_))));
     }
 }
