@@ -76,18 +76,18 @@ pub async fn list_provider_models(
                 .header("anthropic-version", "2023-06-01")
                 .send()
                 .await
-                .map_err(|e| format!("Request failed: {}", e))?;
+                .map_err(|e| format!("Request failed: {e}"))?;
 
             if !resp.status().is_success() {
                 let status = resp.status();
                 let text = resp.text().await.unwrap_or_default();
-                return Err(format!("API error {}: {}", status, text));
+                return Err(format!("API error {status}: {text}"));
             }
 
             let payload: AnthropicModelsResponse = resp
                 .json()
                 .await
-                .map_err(|e| format!("Failed to parse response: {}", e))?;
+                .map_err(|e| format!("Failed to parse response: {e}"))?;
 
             payload
                 .data
@@ -108,18 +108,18 @@ pub async fn list_provider_models(
             let resp = bearer_request(client.get(&url), &api_key)
                 .send()
                 .await
-                .map_err(|e| format!("Request failed: {}", e))?;
+                .map_err(|e| format!("Request failed: {e}"))?;
 
             if !resp.status().is_success() {
                 let status = resp.status();
                 let text = resp.text().await.unwrap_or_default();
-                return Err(format!("API error {}: {}", status, text));
+                return Err(format!("API error {status}: {text}"));
             }
 
             let payload: OllamaTagsResponse = resp
                 .json()
                 .await
-                .map_err(|e| format!("Failed to parse response: {}", e))?;
+                .map_err(|e| format!("Failed to parse response: {e}"))?;
 
             payload
                 .models
@@ -147,18 +147,18 @@ pub async fn list_provider_models(
             let resp = bearer_request(client.get(&url), &api_key)
                 .send()
                 .await
-                .map_err(|e| format!("Request failed: {}", e))?;
+                .map_err(|e| format!("Request failed: {e}"))?;
 
             if !resp.status().is_success() {
                 let status = resp.status();
                 let text = resp.text().await.unwrap_or_default();
-                return Err(format!("API error {}: {}", status, text));
+                return Err(format!("API error {status}: {text}"));
             }
 
             let payload: OpenAiModelsResponse = resp
                 .json()
                 .await
-                .map_err(|e| format!("Failed to parse response: {}", e))?;
+                .map_err(|e| format!("Failed to parse response: {e}"))?;
 
             payload
                 .data

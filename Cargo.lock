@@ -1414,6 +1414,7 @@ dependencies = [
  "qcli-platform",
  "qcli-providers",
  "qcli-tui",
+ "serde_json",
  "tempfile",
 ]
 
