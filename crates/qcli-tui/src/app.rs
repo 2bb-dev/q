@@ -22,6 +22,7 @@ pub enum Input {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Effect {
     CopyToClipboard(String),
+    CopyAndPersist(String),
     Persist,
     Quit,
     Status(String),

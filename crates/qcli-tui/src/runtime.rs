@@ -7,7 +7,6 @@ use crossterm::{
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, Clear, ClearType},
 };
-use qcli_core::Queue;
 use qcli_platform::clipboard::{Clipboard, SystemClipboard};
 use qcli_platform::lock::FileLock;
 use ratatui::{backend::CrosstermBackend, Terminal};
@@ -19,8 +18,8 @@ use crate::Input;
 use crate::Pane;
 
 pub fn run(queue_path: &Path) -> Result<()> {
-    let _lock = FileLock::acquire(queue_path)?;
-    let queue = qcli_core::storage::load(queue_path).unwrap_or_else(|_| Queue::new());
+    let _lock = FileLock::acquire(&queue_path.with_extension("lock"))?;
+    let queue = qcli_core::storage::load(queue_path)?;
     let mut app = App::new(queue);
     let mut clipboard = SystemClipboard::new()?;
 
@@ -58,6 +57,11 @@ fn event_loop(
             Some(Effect::Quit) => return Ok(()),
             Some(Effect::CopyToClipboard(text)) => {
                 clipboard.set_text(&text)?;
+                app.status = format!("copied {} chars", text.chars().count());
+            }
+            Some(Effect::CopyAndPersist(text)) => {
+                clipboard.set_text(&text)?;
+                qcli_core::storage::save(queue_path, &app.queue)?;
                 app.status = format!("copied {} chars", text.chars().count());
             }
             Some(Effect::Persist) => {
