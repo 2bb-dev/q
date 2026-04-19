@@ -5,8 +5,7 @@ use qcli_tui::{reduce, App, Effect, Input};
 fn end_to_end_reducer_flow() {
     let mut app = App::new(Queue::new());
 
-    // Focus composer, type "first", save.
-    reduce(&mut app, Input::Tab);
+    // Empty queue starts focused on composer; type "first" and save.
     for c in "first".chars() {
         reduce(&mut app, Input::Char(c));
     }

@@ -40,20 +40,20 @@ fn reduce_queue(app: &mut App, input: Input) -> Option<Effect> {
             if !prompt.pinned {
                 app.queue.remove(prompt.id).ok()?;
                 reclamp_selection(app);
+                if app.visible_prompts().is_empty() {
+                    app.focus = Pane::Composer;
+                }
             }
-            Some(Effect::CopyToClipboard(prompt.text))
-        }
-        Input::Char('y') => {
-            let prompt = app.selected_prompt()?.clone();
             Some(Effect::CopyToClipboard(prompt.text))
         }
         Input::Char('p') => {
             let prompt = app.selected_prompt()?.clone();
             app.queue.set_pinned(prompt.id, !prompt.pinned).ok()?;
+            if let Some(new_idx) = app.visible_prompts().iter().position(|p| p.id == prompt.id) {
+                app.selected = Some(new_idx);
+            }
             Some(Effect::Persist)
         }
-        Input::ShiftDown => move_selection(app, 1),
-        Input::ShiftUp => move_selection(app, -1),
         Input::Char('e') => {
             let prompt = app.selected_prompt()?.clone();
             app.queue.remove(prompt.id).ok()?;
@@ -72,15 +72,7 @@ fn reduce_composer(app: &mut App, input: Input) -> Option<Effect> {
             app.composer.push(c);
             None
         }
-        Input::Enter => {
-            app.composer.push('\n');
-            None
-        }
-        Input::Backspace => {
-            app.composer.pop();
-            None
-        }
-        Input::CtrlS => {
+        Input::Enter | Input::CtrlS => {
             let text = app.composer.trim().to_string();
             if text.is_empty() {
                 return None;
@@ -92,9 +84,10 @@ fn reduce_composer(app: &mut App, input: Input) -> Option<Effect> {
             app.focus = Pane::Queue;
             Some(Effect::Persist)
         }
-        Input::CtrlU => Some(Effect::Status(
-            "Upgrade not yet wired — configure providers first".to_string(),
-        )),
+        Input::Backspace => {
+            app.composer.pop();
+            None
+        }
         Input::Esc => {
             app.focus = Pane::Queue;
             None
@@ -109,20 +102,6 @@ fn reclamp_selection(app: &mut App) {
         app.selected = None;
     } else if let Some(i) = app.selected {
         app.selected = Some(i.min(len - 1));
-    }
-}
-
-fn move_selection(app: &mut App, delta: i32) -> Option<Effect> {
-    let prompt = app.selected_prompt()?.clone();
-    if app.queue.move_within_group(prompt.id, delta).ok()? {
-        let new_idx = app
-            .visible_prompts()
-            .iter()
-            .position(|p| p.id == prompt.id)?;
-        app.selected = Some(new_idx);
-        Some(Effect::Persist)
-    } else {
-        None
     }
 }
 
@@ -192,15 +171,6 @@ mod tests {
     }
 
     #[test]
-    fn y_copies_without_popping() {
-        let mut app = app_with(2);
-        let text = app.selected_prompt().unwrap().text.clone();
-        let effect = reduce(&mut app, Input::Char('y'));
-        assert_eq!(effect, Some(Effect::CopyToClipboard(text)));
-        assert_eq!(app.visible_prompts().len(), 2);
-    }
-
-    #[test]
     fn p_toggles_pin_and_emits_persist() {
         let mut app = app_with(1);
         let effect = reduce(&mut app, Input::Char('p'));
@@ -209,25 +179,6 @@ mod tests {
         let effect2 = reduce(&mut app, Input::Char('p'));
         assert_eq!(effect2, Some(Effect::Persist));
         assert!(!app.selected_prompt().unwrap().pinned);
-    }
-
-    #[test]
-    fn shift_down_moves_prompt_down_within_group() {
-        let mut app = app_with(3);
-        let ids: Vec<_> = app.visible_prompts().iter().map(|p| p.id).collect();
-        let effect = reduce(&mut app, Input::ShiftDown);
-        assert_eq!(effect, Some(Effect::Persist));
-        let after: Vec<_> = app.visible_prompts().iter().map(|p| p.id).collect();
-        assert_eq!(after[0], ids[1]);
-        assert_eq!(after[1], ids[0]);
-        assert_eq!(app.selected, Some(1));
-    }
-
-    #[test]
-    fn shift_up_at_top_is_noop() {
-        let mut app = app_with(2);
-        let effect = reduce(&mut app, Input::ShiftUp);
-        assert_eq!(effect, None);
     }
 
     #[test]
@@ -249,13 +200,14 @@ mod tests {
     }
 
     #[test]
-    fn composer_enter_inserts_newline() {
+    fn composer_enter_saves_prompt() {
         let mut app = app_with(0);
         app.focus = Pane::Composer;
-        reduce(&mut app, Input::Char('a'));
-        reduce(&mut app, Input::Enter);
-        reduce(&mut app, Input::Char('b'));
-        assert_eq!(app.composer, "a\nb");
+        app.composer = "hi".to_string();
+        let effect = reduce(&mut app, Input::Enter);
+        assert_eq!(effect, Some(Effect::Persist));
+        assert_eq!(app.visible_prompts().len(), 1);
+        assert_eq!(app.focus, Pane::Queue);
     }
 
     #[test]
@@ -287,14 +239,5 @@ mod tests {
         app.focus = Pane::Composer;
         let effect = reduce(&mut app, Input::CtrlS);
         assert_eq!(effect, None);
-    }
-
-    #[test]
-    fn ctrl_u_in_composer_sets_status() {
-        let mut app = app_with(0);
-        app.focus = Pane::Composer;
-        app.composer = "hi".to_string();
-        let effect = reduce(&mut app, Input::CtrlU);
-        assert!(matches!(effect, Some(Effect::Status(_))));
     }
 }
