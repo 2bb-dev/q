@@ -1,0 +1,20 @@
+[package]
+name = "qcli-platform"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[features]
+test-support = []
+
+[dependencies]
+thiserror = { workspace = true }
+arboard = { workspace = true }
+fd-lock = { workspace = true }
+directories = { workspace = true }
+image = { workspace = true }
+chrono = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
