@@ -38,14 +38,26 @@ fn render_queue(f: &mut Frame, app: &App, area: Rect) {
     let mut lines: Vec<Line> = Vec::new();
     let mut idx = 0usize;
     for p in &pinned {
-        lines.push(row_line(idx, app.selected, "*", &short_id(&p.id.to_string()), &p.text));
+        lines.push(row_line(
+            idx,
+            app.selected,
+            "*",
+            &short_id(&p.id.to_string()),
+            &p.text,
+        ));
         idx += 1;
     }
     if !pinned.is_empty() && !unpinned.is_empty() {
         lines.push(Line::raw("  ──────"));
     }
     for p in &unpinned {
-        lines.push(row_line(idx, app.selected, " ", &short_id(&p.id.to_string()), &p.text));
+        lines.push(row_line(
+            idx,
+            app.selected,
+            " ",
+            &short_id(&p.id.to_string()),
+            &p.text,
+        ));
         idx += 1;
     }
     if lines.is_empty() {
@@ -59,11 +71,20 @@ fn render_queue(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(Paragraph::new(lines).block(block), area);
 }
 
-fn row_line(idx: usize, selected: Option<usize>, mark: &str, id: &str, text: &str) -> Line<'static> {
+fn row_line(
+    idx: usize,
+    selected: Option<usize>,
+    mark: &str,
+    id: &str,
+    text: &str,
+) -> Line<'static> {
     let cursor = if Some(idx) == selected { ">" } else { " " };
     let spans = vec![
         Span::raw(format!("{cursor}{mark} ")),
-        Span::styled(format!("{id:<6}"), Style::default().add_modifier(Modifier::DIM)),
+        Span::styled(
+            format!("{id:<6}"),
+            Style::default().add_modifier(Modifier::DIM),
+        ),
         Span::raw(" "),
         Span::raw(text.lines().next().unwrap_or("").to_string()),
     ];
