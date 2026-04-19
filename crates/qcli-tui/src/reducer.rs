@@ -47,6 +47,11 @@ fn reduce_queue(app: &mut App, input: Input) -> Option<Effect> {
             let prompt = app.selected_prompt()?.clone();
             Some(Effect::CopyToClipboard(prompt.text))
         }
+        Input::Char('p') => {
+            let prompt = app.selected_prompt()?.clone();
+            app.queue.set_pinned(prompt.id, !prompt.pinned).ok()?;
+            Some(Effect::Persist)
+        }
         _ => None,
     }
 }
@@ -136,5 +141,16 @@ mod tests {
         let effect = reduce(&mut app, Input::Char('y'));
         assert_eq!(effect, Some(Effect::CopyToClipboard(text)));
         assert_eq!(app.visible_prompts().len(), 2);
+    }
+
+    #[test]
+    fn p_toggles_pin_and_emits_persist() {
+        let mut app = app_with(1);
+        let effect = reduce(&mut app, Input::Char('p'));
+        assert_eq!(effect, Some(Effect::Persist));
+        assert!(app.selected_prompt().unwrap().pinned);
+        let effect2 = reduce(&mut app, Input::Char('p'));
+        assert_eq!(effect2, Some(Effect::Persist));
+        assert!(!app.selected_prompt().unwrap().pinned);
     }
 }
