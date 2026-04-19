@@ -1,16 +1,27 @@
 use crate::app::{App, Effect, Input, Pane};
 
 pub fn reduce(app: &mut App, input: Input) -> Option<Effect> {
-    match (app.focus, input) {
-        (_, Input::Quit) => Some(Effect::Quit),
+    match (app.focus, &input) {
+        (_, Input::Quit) => return Some(Effect::Quit),
         (_, Input::Tab) => {
             app.focus = match app.focus {
                 Pane::Queue => Pane::Composer,
                 Pane::Composer => Pane::Queue,
             };
-            None
+            return None;
         }
-        (Pane::Queue, Input::Down) => {
+        _ => {}
+    }
+
+    match app.focus {
+        Pane::Queue => reduce_queue(app, input),
+        Pane::Composer => reduce_composer(app, input),
+    }
+}
+
+fn reduce_queue(app: &mut App, input: Input) -> Option<Effect> {
+    match input {
+        Input::Down => {
             let len = app.visible_prompts().len();
             if len > 0 {
                 let next = app.selected.map(|i| (i + 1).min(len - 1)).unwrap_or(0);
@@ -18,13 +29,38 @@ pub fn reduce(app: &mut App, input: Input) -> Option<Effect> {
             }
             None
         }
-        (Pane::Queue, Input::Up) => {
+        Input::Up => {
             if let Some(i) = app.selected {
                 app.selected = Some(i.saturating_sub(1));
             }
             None
         }
+        Input::Enter => {
+            let prompt = app.selected_prompt()?.clone();
+            if !prompt.pinned {
+                app.queue.remove(prompt.id).ok()?;
+                reclamp_selection(app);
+            }
+            Some(Effect::CopyToClipboard(prompt.text))
+        }
+        Input::Char('y') => {
+            let prompt = app.selected_prompt()?.clone();
+            Some(Effect::CopyToClipboard(prompt.text))
+        }
         _ => None,
+    }
+}
+
+fn reduce_composer(_app: &mut App, _input: Input) -> Option<Effect> {
+    None
+}
+
+fn reclamp_selection(app: &mut App) {
+    let len = app.visible_prompts().len();
+    if len == 0 {
+        app.selected = None;
+    } else if let Some(i) = app.selected {
+        app.selected = Some(i.min(len - 1));
     }
 }
 
@@ -71,5 +107,34 @@ mod tests {
     fn quit_returns_quit_effect() {
         let mut app = app_with(0);
         assert_eq!(reduce(&mut app, Input::Quit), Some(Effect::Quit));
+    }
+
+    #[test]
+    fn enter_on_unpinned_copies_and_pops() {
+        let mut app = app_with(2);
+        let text = app.selected_prompt().unwrap().text.clone();
+        let effect = reduce(&mut app, Input::Enter);
+        assert_eq!(effect, Some(Effect::CopyToClipboard(text)));
+        assert_eq!(app.visible_prompts().len(), 1);
+    }
+
+    #[test]
+    fn enter_on_pinned_copies_but_does_not_pop() {
+        let mut app = app_with(1);
+        let pid = app.visible_prompts()[0].id;
+        app.queue.set_pinned(pid, true).unwrap();
+        let text = app.selected_prompt().unwrap().text.clone();
+        let effect = reduce(&mut app, Input::Enter);
+        assert_eq!(effect, Some(Effect::CopyToClipboard(text)));
+        assert_eq!(app.visible_prompts().len(), 1);
+    }
+
+    #[test]
+    fn y_copies_without_popping() {
+        let mut app = app_with(2);
+        let text = app.selected_prompt().unwrap().text.clone();
+        let effect = reduce(&mut app, Input::Char('y'));
+        assert_eq!(effect, Some(Effect::CopyToClipboard(text)));
+        assert_eq!(app.visible_prompts().len(), 2);
     }
 }
