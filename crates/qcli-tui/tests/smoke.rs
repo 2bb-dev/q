@@ -29,7 +29,7 @@ fn end_to_end_reducer_flow() {
     // Copy+pop the unpinned "second".
     reduce(&mut app, Input::Down);
     let eff = reduce(&mut app, Input::Enter);
-    assert_eq!(eff, Some(Effect::CopyToClipboard("second".to_string())));
+    assert_eq!(eff, Some(Effect::CopyAndPersist("second".to_string())));
     assert_eq!(app.visible_prompts().len(), 1);
 
     // Quit.

@@ -37,14 +37,16 @@ fn reduce_queue(app: &mut App, input: Input) -> Option<Effect> {
         }
         Input::Enter => {
             let prompt = app.selected_prompt()?.clone();
-            if !prompt.pinned {
+            if prompt.pinned {
+                Some(Effect::CopyToClipboard(prompt.text))
+            } else {
                 app.queue.remove(prompt.id).ok()?;
                 reclamp_selection(app);
                 if app.visible_prompts().is_empty() {
                     app.focus = Pane::Composer;
                 }
+                Some(Effect::CopyAndPersist(prompt.text))
             }
-            Some(Effect::CopyToClipboard(prompt.text))
         }
         Input::Char('p') => {
             let prompt = app.selected_prompt()?.clone();
@@ -155,7 +157,7 @@ mod tests {
         let mut app = app_with(2);
         let text = app.selected_prompt().unwrap().text.clone();
         let effect = reduce(&mut app, Input::Enter);
-        assert_eq!(effect, Some(Effect::CopyToClipboard(text)));
+        assert_eq!(effect, Some(Effect::CopyAndPersist(text)));
         assert_eq!(app.visible_prompts().len(), 1);
     }
 
