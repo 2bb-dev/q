@@ -11,7 +11,6 @@ use qcli_platform::paths;
 use std::path::PathBuf;
 
 /// Lock the queue file, load the queue, and return the bundle.
-#[allow(dead_code)]
 pub(crate) fn open_queue() -> Result<(Queue, FileLock, PathBuf)> {
     let path = paths::queue_path()?;
     let lock = FileLock::acquire(&path.with_extension("lock"))?;
@@ -19,7 +18,6 @@ pub(crate) fn open_queue() -> Result<(Queue, FileLock, PathBuf)> {
     Ok((queue, lock, path))
 }
 
-#[allow(dead_code)]
 pub(crate) fn save_queue(path: &std::path::Path, queue: &Queue) -> Result<()> {
     storage::save(path, queue)?;
     Ok(())
