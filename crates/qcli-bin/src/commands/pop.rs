@@ -18,8 +18,6 @@ pub fn run(id: Option<String>, next: bool, stdout: bool) -> Result<()> {
             .ok_or_else(|| anyhow!("no unpinned prompts to pop"))?
     };
 
-    save_queue(&path, &queue)?;
-
     if stdout {
         print!("{}", popped.text);
     } else {
@@ -31,5 +29,7 @@ pub fn run(id: Option<String>, next: bool, stdout: bool) -> Result<()> {
             popped.text.chars().count()
         );
     }
+
+    save_queue(&path, &queue)?;
     Ok(())
 }
