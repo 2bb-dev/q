@@ -12,6 +12,7 @@ path = "src/main.rs"
 [dependencies]
 anyhow = { workspace = true }
 clap = { workspace = true }
+serde_json = { workspace = true }
 qcli-core = { path = "../qcli-core" }
 qcli-platform = { path = "../qcli-platform" }
 qcli-providers = { path = "../qcli-providers" }
@@ -20,4 +21,5 @@ qcli-tui = { path = "../qcli-tui" }
 [dev-dependencies]
 assert_cmd = { workspace = true }
 predicates = { workspace = true }
+serde_json = { workspace = true }
 tempfile = { workspace = true }
