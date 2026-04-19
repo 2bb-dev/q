@@ -7,12 +7,7 @@ use crate::error::{CoreError, Result};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct PromptId(pub Uuid);
 
-impl Default for PromptId {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
+#[allow(clippy::new_without_default)]
 impl PromptId {
     pub fn new() -> Self {
         PromptId(Uuid::new_v4())
