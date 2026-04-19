@@ -1466,6 +1466,7 @@ dependencies = [
  "qcli-core",
  "qcli-platform",
  "ratatui",
+ "tempfile",
 ]
 
 [[package]]

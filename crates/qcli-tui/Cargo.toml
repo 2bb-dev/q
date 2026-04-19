@@ -11,3 +11,7 @@ ratatui = { workspace = true }
 crossterm = { workspace = true }
 qcli-core = { path = "../qcli-core" }
 qcli-platform = { path = "../qcli-platform" }
+
+[dev-dependencies]
+qcli-platform = { path = "../qcli-platform", features = ["test-support"] }
+tempfile = { workspace = true }
