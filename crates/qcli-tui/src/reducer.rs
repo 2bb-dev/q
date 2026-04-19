@@ -52,6 +52,8 @@ fn reduce_queue(app: &mut App, input: Input) -> Option<Effect> {
             app.queue.set_pinned(prompt.id, !prompt.pinned).ok()?;
             Some(Effect::Persist)
         }
+        Input::ShiftDown => move_selection(app, 1),
+        Input::ShiftUp => move_selection(app, -1),
         _ => None,
     }
 }
@@ -66,6 +68,17 @@ fn reclamp_selection(app: &mut App) {
         app.selected = None;
     } else if let Some(i) = app.selected {
         app.selected = Some(i.min(len - 1));
+    }
+}
+
+fn move_selection(app: &mut App, delta: i32) -> Option<Effect> {
+    let prompt = app.selected_prompt()?.clone();
+    if app.queue.move_within_group(prompt.id, delta).ok()? {
+        let new_idx = app.visible_prompts().iter().position(|p| p.id == prompt.id)?;
+        app.selected = Some(new_idx);
+        Some(Effect::Persist)
+    } else {
+        None
     }
 }
 
@@ -152,5 +165,24 @@ mod tests {
         let effect2 = reduce(&mut app, Input::Char('p'));
         assert_eq!(effect2, Some(Effect::Persist));
         assert!(!app.selected_prompt().unwrap().pinned);
+    }
+
+    #[test]
+    fn shift_down_moves_prompt_down_within_group() {
+        let mut app = app_with(3);
+        let ids: Vec<_> = app.visible_prompts().iter().map(|p| p.id).collect();
+        let effect = reduce(&mut app, Input::ShiftDown);
+        assert_eq!(effect, Some(Effect::Persist));
+        let after: Vec<_> = app.visible_prompts().iter().map(|p| p.id).collect();
+        assert_eq!(after[0], ids[1]);
+        assert_eq!(after[1], ids[0]);
+        assert_eq!(app.selected, Some(1));
+    }
+
+    #[test]
+    fn shift_up_at_top_is_noop() {
+        let mut app = app_with(2);
+        let effect = reduce(&mut app, Input::ShiftUp);
+        assert_eq!(effect, None);
     }
 }
