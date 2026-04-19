@@ -114,6 +114,68 @@ impl Queue {
     pub fn clear(&mut self) {
         self.prompts.clear();
     }
+
+    pub fn iter_pinned(&self) -> impl Iterator<Item = &Prompt> {
+        self.prompts.iter().filter(|p| p.pinned)
+    }
+
+    pub fn iter_unpinned(&self) -> impl Iterator<Item = &Prompt> {
+        self.prompts.iter().filter(|p| !p.pinned)
+    }
+
+    /// Build a Prompt from raw text and add it at the tail (unpinned).
+    /// Returns the new id, or CoreError::Invalid if text is empty/whitespace.
+    pub fn add_text(&mut self, text: impl Into<String>) -> Result<PromptId> {
+        let prompt = Prompt::new(text)?;
+        Ok(self.add(prompt))
+    }
+
+    pub fn move_within_group(&mut self, id: PromptId, delta: i32) -> Result<bool> {
+        if delta == 0 {
+            return Ok(false);
+        }
+        let cur = self
+            .prompts
+            .iter()
+            .position(|p| p.id == id)
+            .ok_or_else(|| CoreError::NotFound(id.to_string()))?;
+
+        let pinned = self.prompts[cur].pinned;
+        let (lo, hi) = if pinned {
+            (
+                0,
+                self.prompts
+                    .iter()
+                    .position(|p| !p.pinned)
+                    .unwrap_or(self.prompts.len()),
+            )
+        } else {
+            (
+                self.prompts
+                    .iter()
+                    .position(|p| !p.pinned)
+                    .unwrap_or(self.prompts.len()),
+                self.prompts.len(),
+            )
+        };
+
+        let target_signed = cur as i32 + delta;
+        let target = target_signed.clamp(lo as i32, hi as i32 - 1) as usize;
+        if target == cur {
+            return Ok(false);
+        }
+
+        if target > cur {
+            for i in cur..target {
+                self.prompts.swap(i, i + 1);
+            }
+        } else {
+            for i in (target..cur).rev() {
+                self.prompts.swap(i, i + 1);
+            }
+        }
+        Ok(true)
+    }
 }
 
 #[cfg(test)]
@@ -232,5 +294,117 @@ mod tests {
         q.add(p("b"));
         q.clear();
         assert!(q.is_empty());
+    }
+
+    #[test]
+    fn iter_pinned_only_yields_pinned() {
+        let mut q = Queue::new();
+        q.add(p("unpinned-a"));
+        let mut pin1 = p("pinned-1");
+        pin1.pinned = true;
+        let mut pin2 = p("pinned-2");
+        pin2.pinned = true;
+        q.add(pin1);
+        q.add(pin2);
+        q.add(p("unpinned-b"));
+        let pinned: Vec<_> = q.iter_pinned().map(|p| p.text.as_str()).collect();
+        assert_eq!(pinned.len(), 2);
+        assert!(pinned.contains(&"pinned-1"));
+        assert!(pinned.contains(&"pinned-2"));
+    }
+
+    #[test]
+    fn iter_unpinned_only_yields_unpinned() {
+        let mut q = Queue::new();
+        q.add(p("unpinned-a"));
+        q.add(p("unpinned-b"));
+        let mut pin = p("pinned-1");
+        pin.pinned = true;
+        q.add(pin);
+        let unpinned: Vec<_> = q.iter_unpinned().map(|p| p.text.as_str()).collect();
+        assert_eq!(unpinned.len(), 2);
+        assert!(unpinned.contains(&"unpinned-a"));
+        assert!(unpinned.contains(&"unpinned-b"));
+    }
+
+    #[test]
+    fn add_text_builds_prompt_and_returns_id() {
+        let mut q = Queue::new();
+        let id = q.add_text("hello").unwrap();
+        assert_eq!(q.len(), 1);
+        let prompt = q.get(id).unwrap();
+        assert_eq!(prompt.text, "hello");
+        assert_eq!(prompt.id, id);
+    }
+
+    #[test]
+    fn add_text_rejects_empty() {
+        let mut q = Queue::new();
+        assert!(q.add_text("").is_err());
+        assert!(q.add_text("   \n").is_err());
+    }
+
+    #[test]
+    fn move_within_group_swaps_within_unpinned() {
+        let mut q = Queue::new();
+        let id0 = q.add_text("first").unwrap();
+        let _id1 = q.add_text("second").unwrap();
+        let _id2 = q.add_text("third").unwrap();
+        let result = q.move_within_group(id0, 1).unwrap();
+        assert!(result);
+        let texts: Vec<_> = q.iter().map(|p| p.text.as_str()).collect();
+        assert_eq!(texts[0], "second");
+        assert_eq!(texts[1], "first");
+        assert_eq!(texts[2], "third");
+    }
+
+    #[test]
+    fn move_within_group_clamps_at_boundary() {
+        let mut q = Queue::new();
+        let head_id = q.add_text("head").unwrap();
+        q.add_text("mid").unwrap();
+        let tail_id = q.add_text("tail").unwrap();
+        // Move head up — already at boundary
+        assert!(!q.move_within_group(head_id, -1).unwrap());
+        // Move tail down — already at boundary
+        assert!(!q.move_within_group(tail_id, 1).unwrap());
+        // Order unchanged
+        let texts: Vec<_> = q.iter().map(|p| p.text.as_str()).collect();
+        assert_eq!(texts, vec!["head", "mid", "tail"]);
+    }
+
+    #[test]
+    fn move_within_group_cannot_cross_into_other_group() {
+        let mut q = Queue::new();
+        let mut pin = p("pinned");
+        pin.pinned = true;
+        let pin_id = q.add(pin);
+        let unpin0_id = q.add_text("unpin-first").unwrap();
+        q.add_text("unpin-second").unwrap();
+        // Moving the only pinned prompt down by 5 — single-item group, clamps to itself
+        assert!(!q.move_within_group(pin_id, 5).unwrap());
+        // Moving first unpinned up by 5 — clamps to unpinned-group head, no change
+        assert!(!q.move_within_group(unpin0_id, -5).unwrap());
+        // Invariant: pinned still first
+        assert!(q.prompts[0].pinned);
+        assert!(!q.prompts[1].pinned);
+    }
+
+    #[test]
+    fn move_within_group_unknown_id_is_error() {
+        let mut q = Queue::new();
+        let unknown = PromptId::new();
+        assert!(matches!(
+            q.move_within_group(unknown, 1),
+            Err(CoreError::NotFound(_))
+        ));
+    }
+
+    #[test]
+    fn move_within_group_zero_delta_is_noop() {
+        let mut q = Queue::new();
+        let id = q.add_text("only").unwrap();
+        assert!(!q.move_within_group(id, 0).unwrap());
+        assert_eq!(q.len(), 1);
     }
 }

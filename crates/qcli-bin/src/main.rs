@@ -46,6 +46,8 @@ enum Command {
     Pin { id: String },
     /// Unpin a prompt.
     Unpin { id: String },
+    /// Launch the TUI.
+    Tui,
 }
 
 fn main() -> Result<()> {
@@ -57,5 +59,6 @@ fn main() -> Result<()> {
         Command::Pop { id, next, stdout } => commands::pop::run(id, next, stdout),
         Command::Pin { id } => commands::pin::run(&id, true),
         Command::Unpin { id } => commands::pin::run(&id, false),
+        Command::Tui => commands::tui::run(),
     }
 }

@@ -1,5 +1,9 @@
 //! q-cli TUI crate (ratatui + crossterm).
-//!
-//! Implemented in the follow-up plan (see `docs/superpowers/plans/`).
-//! This crate is intentionally empty right now — it pulls in the `ratatui`
-//! and `crossterm` dependencies so the workspace graph is stable.
+pub mod app;
+pub mod reducer;
+pub mod render;
+pub mod runtime;
+pub use app::{App, Effect, Input, Pane};
+pub use reducer::reduce;
+pub use render::draw;
+pub use runtime::run;
