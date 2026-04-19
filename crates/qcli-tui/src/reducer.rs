@@ -54,6 +54,14 @@ fn reduce_queue(app: &mut App, input: Input) -> Option<Effect> {
         }
         Input::ShiftDown => move_selection(app, 1),
         Input::ShiftUp => move_selection(app, -1),
+        Input::Char('e') => {
+            let prompt = app.selected_prompt()?.clone();
+            app.queue.remove(prompt.id).ok()?;
+            reclamp_selection(app);
+            app.composer = prompt.text;
+            app.focus = Pane::Composer;
+            Some(Effect::Persist)
+        }
         _ => None,
     }
 }
@@ -184,5 +192,14 @@ mod tests {
         let mut app = app_with(2);
         let effect = reduce(&mut app, Input::ShiftUp);
         assert_eq!(effect, None);
+    }
+
+    #[test]
+    fn e_loads_selected_into_composer_and_focuses_composer() {
+        let mut app = app_with(1);
+        let text = app.selected_prompt().unwrap().text.clone();
+        reduce(&mut app, Input::Char('e'));
+        assert_eq!(app.composer, text);
+        assert_eq!(app.focus, Pane::Composer);
     }
 }
