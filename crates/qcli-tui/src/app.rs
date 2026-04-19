@@ -51,11 +51,15 @@ impl App {
     }
 
     pub fn visible_prompts(&self) -> Vec<&Prompt> {
-        self.queue.iter_pinned().chain(self.queue.iter_unpinned()).collect()
+        self.queue
+            .iter_pinned()
+            .chain(self.queue.iter_unpinned())
+            .collect()
     }
 
     pub fn selected_prompt(&self) -> Option<&Prompt> {
-        self.selected.and_then(|i| self.visible_prompts().into_iter().nth(i))
+        self.selected
+            .and_then(|i| self.visible_prompts().into_iter().nth(i))
     }
 }
 
