@@ -39,7 +39,7 @@ pub fn bearer_request(builder: reqwest::RequestBuilder, api_key: &str) -> reqwes
     if key.is_empty() {
         builder
     } else {
-        builder.header("Authorization", format!("Bearer {}", key))
+        builder.header("Authorization", format!("Bearer {key}"))
     }
 }
 
@@ -53,10 +53,10 @@ pub fn openai_models_url(base_url: &str) -> String {
 pub fn ollama_tags_url(base_url: &str) -> String {
     let normalized = base_url.trim_end_matches('/');
     if let Some(root) = normalized.strip_suffix("/v1") {
-        format!("{}/api/tags", root)
+        format!("{root}/api/tags")
     } else if normalized.ends_with("/api") {
-        format!("{}/tags", normalized)
+        format!("{normalized}/tags")
     } else {
-        format!("{}/api/tags", normalized)
+        format!("{normalized}/api/tags")
     }
 }

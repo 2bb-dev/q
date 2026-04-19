@@ -283,7 +283,7 @@ pub async fn codex_auth_status() -> Result<CodexAuthStatus, String> {
         .arg("status")
         .output()
         .await
-        .map_err(|e| format!("Failed to run codex login status: {}", e))?;
+        .map_err(|e| format!("Failed to run codex login status: {e}"))?;
 
     let stdout_lines = cleaned_output_lines(&output.stdout);
     let stderr_lines = cleaned_output_lines(&output.stderr);
@@ -392,7 +392,7 @@ pub async fn start_codex_device_auth(
                     state: "failed".to_string(),
                     verification_url: String::new(),
                     user_code: String::new(),
-                    message: format!("Failed to start Codex login: {}", err),
+                    message: format!("Failed to start Codex login: {err}"),
                     browser_opened: false,
                 };
                 return;
@@ -430,10 +430,8 @@ pub async fn start_codex_device_auth(
                     guard.message =
                         "Open the login page, enter the one-time code, then finish sign-in."
                             .to_string();
-                    if open_browser && !guard.browser_opened {
-                        if open::that(&url).is_ok() {
-                            guard.browser_opened = true;
-                        }
+                    if open_browser && !guard.browser_opened && open::that(&url).is_ok() {
+                        guard.browser_opened = true;
                     }
                     continue;
                 }
@@ -474,14 +472,14 @@ pub async fn start_codex_device_auth(
             Ok(_) => {
                 guard.state = "failed".to_string();
                 guard.message = if !last_message.is_empty() {
-                    format!("Codex login failed: {}", last_message)
+                    format!("Codex login failed: {last_message}")
                 } else {
                     "Codex login was cancelled or failed.".to_string()
                 };
             }
             Err(err) => {
                 guard.state = "failed".to_string();
-                guard.message = format!("Codex login failed: {}", err);
+                guard.message = format!("Codex login failed: {err}");
             }
         }
     });
@@ -498,7 +496,7 @@ pub async fn run_codex_upgrade(model: String, raw_prompt: String) -> Result<Stri
 
     let output_path = temp_output_path("q-codex-upgrade", ".txt");
     let prompt = format!(
-        r#"{meta}
+        r#"{META_PROMPT}
 
 Additional rules:
 - Do not inspect local files.
@@ -507,9 +505,7 @@ Additional rules:
 - Answer directly with the improved prompt only.
 
 Raw prompt:
-{raw}"#,
-        meta = META_PROMPT,
-        raw = raw_prompt
+{raw_prompt}"#
     );
 
     let mut child = codex_command()
@@ -530,17 +526,17 @@ Raw prompt:
         .stderr(Stdio::piped())
         .kill_on_drop(true)
         .spawn()
-        .map_err(|e| format!("Failed to start Codex: {}", e))?;
+        .map_err(|e| format!("Failed to start Codex: {e}"))?;
 
     if let Some(mut stdin) = child.stdin.take() {
         stdin
             .write_all(prompt.as_bytes())
             .await
-            .map_err(|e| format!("Failed to write prompt to Codex: {}", e))?;
+            .map_err(|e| format!("Failed to write prompt to Codex: {e}"))?;
     }
 
     let output = match timeout(Duration::from_secs(90), child.wait_with_output()).await {
-        Ok(res) => res.map_err(|e| format!("Codex execution failed: {}", e))?,
+        Ok(res) => res.map_err(|e| format!("Codex execution failed: {e}"))?,
         Err(_) => {
             return Err("Codex timed out after 90s".to_string());
         }
@@ -557,7 +553,7 @@ Raw prompt:
 
     let text = tokio::fs::read_to_string(&output_path)
         .await
-        .map_err(|e| format!("Failed to read Codex output: {}", e))?;
+        .map_err(|e| format!("Failed to read Codex output: {e}"))?;
     let _ = tokio::fs::remove_file(&output_path).await;
 
     let trimmed = text.trim().to_string();
