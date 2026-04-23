@@ -116,3 +116,119 @@ fn restore_terminal(term: &mut Terminal<CrosstermBackend<Stdout>>) -> Result<()>
     execute!(term.backend_mut(), Clear(ClearType::All))?;
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn key(code: KeyCode) -> KeyEvent {
+        KeyEvent::new(code, KeyModifiers::NONE)
+    }
+
+    fn with_mods(code: KeyCode, mods: KeyModifiers) -> KeyEvent {
+        KeyEvent::new(code, mods)
+    }
+
+    #[test]
+    fn q_in_queue_pane_quits() {
+        assert_eq!(
+            map_key(key(KeyCode::Char('q')), Pane::Queue),
+            Some(Input::Quit)
+        );
+    }
+
+    #[test]
+    fn q_in_composer_pane_is_a_char() {
+        assert_eq!(
+            map_key(key(KeyCode::Char('q')), Pane::Composer),
+            Some(Input::Char('q'))
+        );
+    }
+
+    #[test]
+    fn ctrl_c_always_quits() {
+        assert_eq!(
+            map_key(
+                with_mods(KeyCode::Char('c'), KeyModifiers::CONTROL),
+                Pane::Queue
+            ),
+            Some(Input::Quit)
+        );
+        assert_eq!(
+            map_key(
+                with_mods(KeyCode::Char('c'), KeyModifiers::CONTROL),
+                Pane::Composer
+            ),
+            Some(Input::Quit)
+        );
+    }
+
+    #[test]
+    fn ctrl_s_is_submit() {
+        assert_eq!(
+            map_key(
+                with_mods(KeyCode::Char('s'), KeyModifiers::CONTROL),
+                Pane::Composer
+            ),
+            Some(Input::CtrlS)
+        );
+    }
+
+    #[test]
+    fn tab_esc_enter_backspace_are_mapped() {
+        assert_eq!(map_key(key(KeyCode::Tab), Pane::Queue), Some(Input::Tab));
+        assert_eq!(map_key(key(KeyCode::Esc), Pane::Composer), Some(Input::Esc));
+        assert_eq!(
+            map_key(key(KeyCode::Enter), Pane::Queue),
+            Some(Input::Enter)
+        );
+        assert_eq!(
+            map_key(key(KeyCode::Backspace), Pane::Composer),
+            Some(Input::Backspace)
+        );
+    }
+
+    #[test]
+    fn arrow_keys_map_to_up_down() {
+        assert_eq!(map_key(key(KeyCode::Up), Pane::Queue), Some(Input::Up));
+        assert_eq!(map_key(key(KeyCode::Down), Pane::Queue), Some(Input::Down));
+    }
+
+    #[test]
+    fn j_k_navigate_in_queue_pane_only() {
+        assert_eq!(
+            map_key(key(KeyCode::Char('j')), Pane::Queue),
+            Some(Input::Down)
+        );
+        assert_eq!(
+            map_key(key(KeyCode::Char('k')), Pane::Queue),
+            Some(Input::Up)
+        );
+        assert_eq!(
+            map_key(key(KeyCode::Char('j')), Pane::Composer),
+            Some(Input::Char('j'))
+        );
+        assert_eq!(
+            map_key(key(KeyCode::Char('k')), Pane::Composer),
+            Some(Input::Char('k'))
+        );
+    }
+
+    #[test]
+    fn printable_chars_pass_through_in_composer() {
+        assert_eq!(
+            map_key(key(KeyCode::Char('x')), Pane::Composer),
+            Some(Input::Char('x'))
+        );
+        assert_eq!(
+            map_key(key(KeyCode::Char(' ')), Pane::Composer),
+            Some(Input::Char(' '))
+        );
+    }
+
+    #[test]
+    fn unmapped_keys_return_none() {
+        assert_eq!(map_key(key(KeyCode::F(5)), Pane::Queue), None);
+        assert_eq!(map_key(key(KeyCode::Home), Pane::Composer), None);
+    }
+}
