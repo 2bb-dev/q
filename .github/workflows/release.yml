@@ -1,0 +1,100 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos-latest
+            target: x86_64-apple-darwin
+            artifact: q-macos-x86_64
+          - platform: macos-latest
+            target: aarch64-apple-darwin
+            artifact: q-macos-aarch64
+          - platform: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            artifact: q-linux-x86_64
+          - platform: windows-latest
+            target: x86_64-pc-windows-msvc
+            artifact: q-windows-x86_64
+
+    runs-on: ${{ matrix.platform }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+
+      - name: Install npm dependencies
+        run: npm install
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build
+        run: cargo build --release --target ${{ matrix.target }} -p qcli-bin
+
+      - name: Package (unix)
+        if: matrix.platform != 'windows-latest'
+        run: |
+          cd target/${{ matrix.target }}/release
+          tar czf ../../../${{ matrix.artifact }}.tar.gz q
+          cd ../../..
+
+      - name: Package (windows)
+        if: matrix.platform == 'windows-latest'
+        run: |
+          cd target/${{ matrix.target }}/release
+          Compress-Archive -Path q.exe -DestinationPath ../../../${{ matrix.artifact }}.zip
+          cd ../../..
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: |
+            ${{ matrix.artifact }}.tar.gz
+            ${{ matrix.artifact }}.zip
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          generate_release_notes: true
+          files: |
+            q-macos-x86_64.tar.gz
+            q-macos-aarch64.tar.gz
+            q-linux-x86_64.tar.gz
+            q-windows-x86_64.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

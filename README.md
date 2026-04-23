@@ -1,71 +1,147 @@
-# q-cli
+<div align="center">
+  <h1><b>q</b></h1>
+  <p>A lightning-fast, terminal-native prompt queue for power users.</p>
 
-Terminal-native prompt queue for power users. Keyboard-first TUI (coming) + scriptable CLI (shipping).
+  [![Version](https://img.shields.io/github/v/release/2bb-dev/q-cli?style=flat-square)](https://github.com/2bb-dev/q-cli/releases)
+  [![CI](https://img.shields.io/github/actions/workflow/status/2bb-dev/q-cli/ci.yml?style=flat-square&label=CI)](https://github.com/2bb-dev/q-cli/actions)
+  [![Platform](https://img.shields.io/badge/Platform-macOS%20%7C%20Linux%20%7C%20Windows-blue?style=flat-square)]()
+  [![License](https://img.shields.io/badge/license-MIT-green?style=flat-square)](LICENSE)
+</div>
 
-## Install (development)
+---
 
-```sh
-git clone git@github.com:2bb-dev/q-cli.git
+> **Created by [2bb](https://github.com/2bb-dev)**
+
+---
+
+**q** is the terminal-native, keyboard-first version of [`q`](https://github.com/2bb-dev/q) — a zero-bloat prompt queue designed for prompt engineering workflows. Queue up text snippets, pin the important ones, and copy-pop them into your LLM sessions without ever leaving the terminal.
+
+Built in **Rust** with [`ratatui`](https://ratatui.rs) for the TUI and [`clap`](https://docs.rs/clap) for the CLI. Fast startup, tiny binary, no runtime dependencies.
+
+## ✨ Features
+
+- **CLI + TUI** — Use `q add`, `q pop`, `q list` from scripts, or launch the interactive TUI for a full visual queue.
+- **Pop-on-Copy** — Copy a prompt to your clipboard and remove it from the queue in one step. True FIFO efficiency.
+- **Pinning** — Lock frequently-used prompts to the top. Pinned prompts copy without popping.
+- **Pipe-friendly** — Read from stdin (`echo "prompt" | q add`), write to stdout (`q pop --stdout`), emit JSON (`q list --json`).
+- **AI Upgrade** *(coming soon)* — Send prompts to OpenAI, Anthropic, or Codex to refine them before use.
+- **Cross-platform** — macOS, Linux, and Windows.
+
+## 🚀 Quick Start
+
+### Install from source
+
+```bash
+# Clone
+git clone https://github.com/2bb-dev/q-cli.git
 cd q-cli
+
+# Build & install
 cargo install --path crates/qcli-bin
 ```
 
-The binary is called `q`.
+The binary is called `q` and will be placed in your Cargo bin directory (`~/.cargo/bin/`).
 
-## Usage
+### Usage
 
-```sh
-q add "refactor the queue module"
-q add --pin "always remember: prefer surgical diffs"
-q add                          # reads from stdin
+```bash
+# Add prompts to the queue
+q add "Explain monads like I'm five"
+q add "Write a Rust macro that generates Builder patterns" --pin
+echo "Summarize this diff" | q add
+
+# List your queue
 q list
 q list --json
-q copy --next                  # copy first prompt to system clipboard
-q copy --next --stdout         # print to stdout (pipeable)
-q copy <id> [--stdout]
-q pop --next                   # copy + remove first unpinned prompt
+
+# Copy the next prompt (FIFO) to clipboard
+q copy --next
+
+# Pop: copy + remove
+q pop --next
+
+# Pop a specific prompt by ID
 q pop <id>
+
+# Output to stdout instead of clipboard
+q pop --next --stdout
+
+# Pin / unpin
 q pin <id>
 q unpin <id>
 ```
 
-Prompt ids accept an 8-char prefix or the full UUID.
+## 🏗 Architecture
 
-## TUI
+`q-cli` is a Cargo workspace split into focused crates:
 
-Launch with:
+```
+crates/
+├── qcli-core       # Queue domain model, persistence (JSON storage)
+├── qcli-platform   # OS abstractions: app dirs, file locking, clipboard, images
+├── qcli-providers   # LLM integrations: OpenAI, Anthropic, Codex
+├── qcli-tui        # Interactive terminal UI (ratatui + crossterm)
+└── qcli-bin        # The `q` binary — thin CLI orchestration
+```
 
-    q tui
+**Design principles:**
+- Domain logic in `qcli-core` is pure — no I/O, no OS calls.
+- Only `qcli-platform` and `qcli-core::storage` touch the filesystem.
+- Provider integrations are isolated and optional.
 
-Queue on top, composer underneath.
+## 🛠 Development
 
-### Key bindings
+### Prerequisites
 
-| Key | Action |
-|---|---|
-| `Tab` | Toggle focus between queue and composer |
-| `j` / `k` or `↓` / `↑` | Move selection (queue pane) |
-| `Enter` | Copy selected prompt; pop if unpinned |
-| `p` | Pin / unpin selected |
-| `e` | Edit selected (loads into composer) |
-| `Ctrl+S` | Save composer text as new prompt |
-| `Ctrl+U` | Upgrade composer via provider (requires config) |
-| `q` (queue focus) / `Ctrl+C` | Quit |
+- **Rust** (stable, pinned via `rust-toolchain.toml`)
+- **Node.js** (for tooling only, not required at runtime)
 
-## Data location
+### Build & Test
 
-- macOS: `~/Library/Application Support/q-cli/queue.json`
-- Linux: `$XDG_DATA_HOME/q-cli/queue.json` or `~/.local/share/q-cli/queue.json`
-- Override anywhere: `QCLI_APP_DIR=/tmp/q-sandbox q ...`
+```bash
+# Build all crates
+cargo build --workspace
 
-## Architecture
+# Run all tests
+cargo test --workspace
 
-- `qcli-core` — queue domain + persistence.
-- `qcli-platform` — app dirs, file locking, system clipboard, image helpers.
-- `qcli-providers` — OpenAI / Anthropic / Codex integrations (dormant; unlocked by future plans).
-- `qcli-tui` — ratatui-based TUI shell (coming).
-- `qcli-bin` — the `q` binary.
+# Lint
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets -- -D warnings
+```
 
-## Roadmap
+### Project Conventions
 
-See `docs/superpowers/plans/` for the next milestones: TUI shell, prompt upgrade, Codex auth.
+- Dependencies are declared at the **workspace level** in the root `Cargo.toml`; crates reference them with `{ workspace = true }`.
+- Error handling: `thiserror` for library crates, `anyhow` for the binary.
+- No `unwrap()` or `expect()` outside tests.
+- Unit tests live next to the code (`mod tests`). Integration tests live in `crates/qcli-bin/tests/`.
+
+## 🗺 Roadmap
+
+- [x] Core queue with FIFO pop, pinning, and JSON persistence
+- [x] CLI commands: `add`, `list`, `copy`, `pop`, `pin`, `unpin`
+- [x] Platform abstractions: clipboard, app dirs, file locking
+- [ ] Interactive TUI (`q` with no subcommand)
+- [ ] AI-powered prompt upgrade via OpenAI / Anthropic / Codex
+- [ ] Homebrew formula & prebuilt binaries
+- [ ] Shell completions (bash, zsh, fish)
+- [ ] Config file support (`~/.config/q/config.toml`)
+
+## 🤝 Contributing
+
+Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
+
+**TL;DR:**
+1. Fork & clone
+2. Create a branch (`feat/my-feature` or `fix/my-bug`)
+3. Make your changes, ensure `cargo test --workspace` passes
+4. Submit a PR
+
+## 📝 License
+
+Distributed under the [MIT License](LICENSE).
+
+## 🔗 Related
+
+- [**q** (desktop)](https://github.com/2bb-dev/q) — The original Tauri desktop app with a visual UI.
