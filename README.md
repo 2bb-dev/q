@@ -1,6 +1,6 @@
 <div align="center">
   <h1><b>q</b></h1>
-  <p>A minimalist native terminal queue.</p>
+  <p>A lightning-fast, minimalist native terminal queue.</p>
 
   [![Version](https://img.shields.io/github/v/release/2bb-dev/q?style=flat-square)](https://github.com/2bb-dev/q/releases)
   [![CI](https://img.shields.io/github/actions/workflow/status/2bb-dev/q/ci.yml?style=flat-square&label=CI)](https://github.com/2bb-dev/q/actions)
