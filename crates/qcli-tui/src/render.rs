@@ -173,3 +173,95 @@ fn render_footer(f: &mut Frame, app: &App, area: Rect) {
 fn dim() -> Style {
     Style::default().fg(MUTED)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app::App;
+    use qcli_core::Queue;
+    use ratatui::{backend::TestBackend, buffer::Buffer, Terminal};
+
+    fn buffer_as_text(buf: &Buffer) -> String {
+        let mut out = String::new();
+        for y in 0..buf.area.height {
+            for x in 0..buf.area.width {
+                out.push_str(buf[(x, y)].symbol());
+            }
+            out.push('\n');
+        }
+        out
+    }
+
+    fn render(app: &App, cursor_on: bool) -> String {
+        let mut terminal = Terminal::new(TestBackend::new(80, 20)).unwrap();
+        terminal.draw(|f| draw(f, app, cursor_on)).unwrap();
+        buffer_as_text(terminal.backend().buffer())
+    }
+
+    #[test]
+    fn empty_queue_renders_composer_placeholder_and_footer_hints() {
+        let app = App::new(Queue::new());
+        let text = render(&app, false);
+        assert!(
+            text.contains("type a prompt"),
+            "expected composer placeholder; got:\n{text}"
+        );
+        assert!(
+            text.contains("enter send/add"),
+            "expected footer hints; got:\n{text}"
+        );
+    }
+
+    #[test]
+    fn queue_renders_all_prompts() {
+        let mut queue = Queue::new();
+        queue.add_text("alpha prompt").unwrap();
+        queue.add_text("beta prompt").unwrap();
+        let app = App::new(queue);
+        let text = render(&app, true);
+        assert!(text.contains("alpha prompt"), "missing alpha; got:\n{text}");
+        assert!(text.contains("beta prompt"), "missing beta; got:\n{text}");
+    }
+
+    #[test]
+    fn composer_text_is_rendered() {
+        let mut app = App::new(Queue::new());
+        app.composer = "typed here".to_string();
+        let text = render(&app, true);
+        assert!(
+            text.contains("typed here"),
+            "missing composer; got:\n{text}"
+        );
+    }
+
+    #[test]
+    fn status_message_replaces_footer_hints() {
+        let mut app = App::new(Queue::new());
+        app.status = "copied 5 chars".to_string();
+        let text = render(&app, false);
+        assert!(
+            text.contains("copied 5 chars"),
+            "status not shown; got:\n{text}"
+        );
+        assert!(
+            !text.contains("enter send/add"),
+            "default hints should be hidden; got:\n{text}"
+        );
+    }
+
+    #[test]
+    fn preview_shows_only_first_line_of_multiline_prompt() {
+        let mut queue = Queue::new();
+        queue.add_text("line one\nline two\nline three").unwrap();
+        let app = App::new(queue);
+        let text = render(&app, true);
+        assert!(
+            text.contains("line one"),
+            "first line missing; got:\n{text}"
+        );
+        assert!(
+            !text.contains("line two"),
+            "subsequent lines leaked into queue row; got:\n{text}"
+        );
+    }
+}

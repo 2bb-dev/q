@@ -61,3 +61,36 @@ fn pin_unknown_id_fails() {
         .failure()
         .stderr(predicates::str::contains("not found"));
 }
+
+#[test]
+fn unpin_unknown_id_fails() {
+    let dir = TempDir::new().unwrap();
+    q(&dir)
+        .args(["unpin", "deadbeef"])
+        .assert()
+        .failure()
+        .stderr(predicates::str::contains("not found"));
+}
+
+#[test]
+fn pin_short_id_rejected() {
+    let dir = TempDir::new().unwrap();
+    q(&dir).args(["add", "x"]).assert().success();
+    q(&dir)
+        .args(["pin", "abc"])
+        .assert()
+        .failure()
+        .stderr(predicates::str::contains("too short"));
+}
+
+#[test]
+fn pin_already_pinned_is_idempotent() {
+    let dir = TempDir::new().unwrap();
+    q(&dir).args(["add", "stuck", "--pin"]).assert().success();
+    let id = short_id_of(&dir, "stuck");
+    q(&dir).args(["pin", &id]).assert().success();
+    let out = q(&dir).args(["list"]).output().unwrap();
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    let line = stdout.lines().find(|l| l.contains("stuck")).unwrap();
+    assert!(line.contains("[P]"), "still pinned after second pin");
+}
