@@ -159,6 +159,9 @@ Use these sections under `## [Unreleased]`:
 - Before adding entries, read the full `[Unreleased]` section to see which subsections already exist.
 - New entries ALWAYS go under `## [Unreleased]`.
 - Append to existing subsections, do not create duplicates.
+- For any user-visible change, update `CHANGELOG.md` in the same PR before merge.
+- Skip changelog updates only for clearly internal-only changes such as CI, docs-only changes, or refactors with no user impact.
+- Do not backfill changelog entries after merge.
 - NEVER modify already-released version sections.
 - Each version section is immutable once released.
 
