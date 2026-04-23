@@ -1,12 +1,12 @@
 # CLAUDE.md
 
-Guidelines for AI agents and contributors working in `q-cli`.
+Guidelines for AI agents and contributors working in `q`.
 
 ---
 
 ## What this project is
 
-`q-cli` is the terminal-native, keyboard-first version of [`q`](https://github.com/2bb-dev/q). The installed binary is called `q`. The codebase is a Rust Cargo workspace:
+`q` is a native terminal queue for prompts, tasks, and text snippets. The original desktop app lives in [`q-desktop`](https://github.com/2bb-dev/q-desktop). The codebase is a Rust Cargo workspace:
 
 - `qcli-core` -- queue domain, persistence.
 - `qcli-platform` -- app dirs, file locking, clipboard.
@@ -164,5 +164,5 @@ Use these sections under `## [Unreleased]`:
 
 ### Attribution
 
-- Internal changes (from issues): `Fixed foo bar ([#123](https://github.com/2bb-dev/q-cli/issues/123))`
-- External contributions: `Added feature X ([#456](https://github.com/2bb-dev/q-cli/pull/456) by [@username](https://github.com/username))`
+- Internal changes (from issues): `Fixed foo bar ([#123](https://github.com/2bb-dev/q/issues/123))`
+- External contributions: `Added feature X ([#456](https://github.com/2bb-dev/q/pull/456) by [@username](https://github.com/username))`

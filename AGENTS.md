@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Guidelines for AI agents (Codex, Claude, Cursor, etc.) working in `q-cli`.
+Guidelines for AI agents (Codex, Claude, Cursor, etc.) working in `q`.
 
 The full policy lives in [CLAUDE.md](./CLAUDE.md). This file exists so agents that look for `AGENTS.md` by convention find the same guidance. Both files are kept in sync; update them together.
 
@@ -8,7 +8,7 @@ The full policy lives in [CLAUDE.md](./CLAUDE.md). This file exists so agents th
 
 ## What this project is
 
-`q-cli` is the terminal-native, keyboard-first version of [`q`](https://github.com/2bb-dev/q). The installed binary is called `q`. The codebase is a Rust Cargo workspace:
+`q` is a native terminal queue for prompts, tasks, and text snippets. The original desktop app lives in [`q-desktop`](https://github.com/2bb-dev/q-desktop). The codebase is a Rust Cargo workspace:
 
 - `qcli-core` -- queue domain, persistence.
 - `qcli-platform` -- app dirs, file locking, clipboard.
@@ -166,5 +166,5 @@ Use these sections under `## [Unreleased]`:
 
 ### Attribution
 
-- Internal changes (from issues): `Fixed foo bar ([#123](https://github.com/2bb-dev/q-cli/issues/123))`
-- External contributions: `Added feature X ([#456](https://github.com/2bb-dev/q-cli/pull/456) by [@username](https://github.com/username))`
+- Internal changes (from issues): `Fixed foo bar ([#123](https://github.com/2bb-dev/q/issues/123))`
+- External contributions: `Added feature X ([#456](https://github.com/2bb-dev/q/pull/456) by [@username](https://github.com/username))`
