@@ -16,7 +16,7 @@ The full policy lives in [CLAUDE.md](./CLAUDE.md). This file exists so agents th
 - `qcli-tui` -- `ratatui` + `crossterm` UI shell.
 - `qcli-bin` -- the `q` binary, thin orchestration over the above.
 
-Implementation plans live in `docs/superpowers/plans/`. Read the current plan before starting work.
+Private planning docs are not tracked in this repository.
 
 ---
 
