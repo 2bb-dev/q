@@ -9,7 +9,7 @@ fn q(dir: &TempDir) -> Command {
 }
 
 #[test]
-fn pop_next_stdout_prints_and_removes_first_unpinned() {
+fn pop_next_stdout_prints_and_removes_newest_unpinned() {
     let dir = TempDir::new().unwrap();
     q(&dir).args(["add", "first"]).assert().success();
     q(&dir).args(["add", "second"]).assert().success();
@@ -17,12 +17,12 @@ fn pop_next_stdout_prints_and_removes_first_unpinned() {
         .args(["pop", "--next", "--stdout"])
         .assert()
         .success()
-        .stdout(predicates::str::starts_with("first"));
+        .stdout(predicates::str::starts_with("second"));
     q(&dir)
         .args(["list"])
         .assert()
-        .stdout(predicates::str::contains("second"))
-        .stdout(predicates::str::contains("first").not());
+        .stdout(predicates::str::contains("first"))
+        .stdout(predicates::str::contains("second").not());
 }
 
 #[test]

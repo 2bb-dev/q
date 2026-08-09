@@ -8,6 +8,18 @@ pub enum CoreError {
     #[error("invalid prompt: {0}")]
     Invalid(String),
 
+    #[error("invalid tab: {0}")]
+    InvalidTab(String),
+
+    #[error("tab not found: {0}")]
+    TabNotFound(String),
+
+    #[error("multiple tabs exist; specify --tab <name> (available: {0})")]
+    TabRequired(String),
+
+    #[error("unsupported storage schema: {0}")]
+    UnsupportedSchema(u32),
+
     #[error("storage error: {0}")]
     Storage(#[from] std::io::Error),
 

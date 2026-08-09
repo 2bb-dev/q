@@ -14,7 +14,8 @@
 
 ## Features
 
-- **Pop-on-Copy** -- Copy a prompt to your clipboard and remove it from the queue in one step. FIFO order.
+- **Workspace tabs** -- Organize prompts into named project queues and switch between them with the mouse or keyboard.
+- **Pop-on-Copy** -- Copy the newest prompt to your clipboard and remove it from its queue in one step.
 - **Pinning** -- Lock frequently-used prompts to the top. Pinned prompts copy without popping.
 - **Pipe-friendly** -- Read from stdin, write to stdout, emit JSON.
 - **Cross-platform** -- macOS, Linux, and Windows.

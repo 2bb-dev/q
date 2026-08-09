@@ -6,20 +6,24 @@ pub mod pop;
 pub mod tui;
 
 use anyhow::Result;
-use qcli_core::{storage, Queue};
+use qcli_core::Workspace;
 use qcli_platform::lock::FileLock;
 use qcli_platform::paths;
-use std::path::PathBuf;
 
-/// Lock the queue file, load the queue, and return the bundle.
-pub(crate) fn open_queue() -> Result<(Queue, FileLock, PathBuf)> {
+pub(crate) fn with_workspace<T>(action: impl FnOnce(&Workspace) -> Result<T>) -> Result<T> {
     let path = paths::queue_path()?;
-    let lock = FileLock::acquire(&path.with_extension("lock"))?;
-    let queue = storage::load(&path)?;
-    Ok((queue, lock, path))
+    let mut lock = FileLock::open(&path.with_extension("lock"))?;
+    let _guard = lock.write()?;
+    let workspace = qcli_core::storage::load(&path)?;
+    action(&workspace)
 }
 
-pub(crate) fn save_queue(path: &std::path::Path, queue: &Queue) -> Result<()> {
-    storage::save(path, queue)?;
-    Ok(())
+pub(crate) fn with_workspace_mut<T>(action: impl FnOnce(&mut Workspace) -> Result<T>) -> Result<T> {
+    let path = paths::queue_path()?;
+    let mut lock = FileLock::open(&path.with_extension("lock"))?;
+    let _guard = lock.write()?;
+    let mut workspace = qcli_core::storage::load(&path)?;
+    let result = action(&mut workspace)?;
+    qcli_core::storage::save(&path, &workspace)?;
+    Ok(result)
 }

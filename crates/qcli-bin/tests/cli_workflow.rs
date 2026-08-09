@@ -60,28 +60,28 @@ fn full_user_journey_persists_across_commands() {
         .stdout(predicates::str::contains("second prompt"))
         .stdout(predicates::str::contains("[P]").not());
 
-    // copy --next returns the head (first) without removing it.
+    // copy --next returns the newest prompt without removing it.
     q(&dir)
         .args(["copy", "--next", "--stdout"])
         .assert()
         .success()
-        .stdout(predicates::str::starts_with("first prompt"));
+        .stdout(predicates::str::starts_with("second prompt"));
     q(&dir)
         .args(["list"])
         .assert()
-        .stdout(predicates::str::contains("first prompt"));
+        .stdout(predicates::str::contains("second prompt"));
 
-    // pop --next removes the first unpinned and returns its text.
+    // pop --next removes the newest unpinned prompt and returns its text.
     q(&dir)
         .args(["pop", "--next", "--stdout"])
         .assert()
         .success()
-        .stdout(predicates::str::starts_with("first prompt"));
+        .stdout(predicates::str::starts_with("second prompt"));
     q(&dir)
         .args(["list"])
         .assert()
-        .stdout(predicates::str::contains("first prompt").not())
-        .stdout(predicates::str::contains("second prompt"));
+        .stdout(predicates::str::contains("second prompt").not())
+        .stdout(predicates::str::contains("first prompt"));
 
     // Add a pinned prompt; list now shows both and the pinned marker.
     q(&dir)
@@ -92,7 +92,7 @@ fn full_user_journey_persists_across_commands() {
         .args(["list"])
         .assert()
         .stdout(predicates::str::contains("sticky note"))
-        .stdout(predicates::str::contains("second prompt"))
+        .stdout(predicates::str::contains("first prompt"))
         .stdout(predicates::str::contains("[P]"));
 
     // pop --next skips the pinned sticky note and returns the remaining unpinned.
@@ -100,12 +100,12 @@ fn full_user_journey_persists_across_commands() {
         .args(["pop", "--next", "--stdout"])
         .assert()
         .success()
-        .stdout(predicates::str::starts_with("second prompt"));
+        .stdout(predicates::str::starts_with("first prompt"));
     q(&dir)
         .args(["list"])
         .assert()
         .stdout(predicates::str::contains("sticky note"))
-        .stdout(predicates::str::contains("second prompt").not());
+        .stdout(predicates::str::contains("first prompt").not());
 
     // With only pinned remaining, pop --next reports no unpinned available.
     q(&dir)

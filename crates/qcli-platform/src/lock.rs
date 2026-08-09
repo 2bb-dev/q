@@ -1,21 +1,19 @@
 //! Advisory file locking for safe concurrent access to the queue file.
-//!
-//! We `Box::leak` one `RwLock<File>` per acquire so the write guard can be
-//! `'static`. This leaks ~8 bytes per invocation — acceptable for a short-
-//! lived CLI process that exits immediately after the lock is released.
-//! A long-lived TUI process should acquire the lock once and hold it.
 
 use std::fs::OpenOptions;
 use std::path::Path;
 
+/// An owned advisory lock file.
+///
+/// Guards borrow this value, so every acquisition is released without leaking
+/// memory when the guard is dropped.
 pub struct FileLock {
-    _guard: fd_lock::RwLockWriteGuard<'static, std::fs::File>,
+    lock: fd_lock::RwLock<std::fs::File>,
 }
 
 impl FileLock {
-    /// Acquire an exclusive advisory lock on `path`. Creates the file if missing.
-    /// Blocks until the lock is available.
-    pub fn acquire(path: &Path) -> std::io::Result<Self> {
+    /// Open the lock file at `path`. Creates the file if missing.
+    pub fn open(path: &Path) -> std::io::Result<Self> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
@@ -25,10 +23,14 @@ impl FileLock {
             .create(true)
             .truncate(false)
             .open(path)?;
-        let lock: &'static mut fd_lock::RwLock<std::fs::File> =
-            Box::leak(Box::new(fd_lock::RwLock::new(file)));
-        let guard = lock.write()?;
-        Ok(FileLock { _guard: guard })
+        Ok(Self {
+            lock: fd_lock::RwLock::new(file),
+        })
+    }
+
+    /// Acquire an exclusive advisory lock, blocking until it is available.
+    pub fn write(&mut self) -> std::io::Result<fd_lock::RwLockWriteGuard<'_, std::fs::File>> {
+        self.lock.write()
     }
 }
 
@@ -44,22 +46,33 @@ mod tests {
         let tmp = NamedTempFile::new().unwrap();
         let path = tmp.path().to_path_buf();
 
-        let first = FileLock::acquire(&path).expect("first acquire");
+        let mut first = FileLock::open(&path).expect("open first lock");
+        let first_guard = first.write().expect("first acquire");
 
         let path2 = path.clone();
         let handle = thread::spawn(move || {
+            let mut second = FileLock::open(&path2).expect("open second lock");
             let start = Instant::now();
-            let _second = FileLock::acquire(&path2).expect("second acquire");
+            let _second_guard = second.write().expect("second acquire");
             start.elapsed()
         });
 
         thread::sleep(Duration::from_millis(150));
-        drop(first);
+        drop(first_guard);
 
         let elapsed = handle.join().unwrap();
         assert!(
             elapsed >= Duration::from_millis(100),
             "second acquire should have waited, elapsed = {elapsed:?}"
         );
+    }
+
+    #[test]
+    fn lock_can_be_reopened_repeatedly() {
+        let tmp = NamedTempFile::new().unwrap();
+        for _ in 0..100 {
+            let mut lock = FileLock::open(tmp.path()).expect("open lock");
+            let _guard = lock.write().expect("acquire lock");
+        }
     }
 }

@@ -1,12 +1,13 @@
 use anyhow::Result;
 
-use super::{open_queue, save_queue};
+use super::with_workspace_mut;
 
 pub fn run(id: &str, pinned: bool) -> Result<()> {
-    let (mut queue, _lock, path) = open_queue()?;
-    let resolved = queue.resolve(id)?;
-    queue.set_pinned(resolved, pinned)?;
-    save_queue(&path, &queue)?;
+    let resolved = with_workspace_mut(|workspace| {
+        let resolved = workspace.resolve_prompt(id)?;
+        workspace.set_prompt_pinned(resolved, pinned)?;
+        Ok(resolved)
+    })?;
     println!("{} {resolved}", if pinned { "pinned" } else { "unpinned" });
     Ok(())
 }

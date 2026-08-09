@@ -25,21 +25,11 @@ impl Queue {
         self.prompts.iter()
     }
 
-    /// Insertion rules:
-    ///   pinned == true  → end of pinned section (before first unpinned)
-    ///   pinned == false → end of full list
+    /// Insert pinned prompts before unpinned prompts, newest first within each group.
     pub fn add(&mut self, prompt: Prompt) -> PromptId {
         let id = prompt.id;
-        if prompt.pinned {
-            let insert_at = self
-                .prompts
-                .iter()
-                .position(|p| !p.pinned)
-                .unwrap_or(self.prompts.len());
-            self.prompts.insert(insert_at, prompt);
-        } else {
-            self.prompts.push(prompt);
-        }
+        self.prompts.push(prompt);
+        self.normalize();
         id
     }
 
@@ -123,11 +113,21 @@ impl Queue {
         self.prompts.iter().filter(|p| !p.pinned)
     }
 
-    /// Build a Prompt from raw text and add it at the tail (unpinned).
+    /// Build a Prompt from raw text and add it to the unpinned group.
     /// Returns the new id, or CoreError::Invalid if text is empty/whitespace.
     pub fn add_text(&mut self, text: impl Into<String>) -> Result<PromptId> {
         let prompt = Prompt::new(text)?;
         Ok(self.add(prompt))
+    }
+
+    pub(crate) fn normalize(&mut self) {
+        self.prompts.sort_by(|left, right| {
+            right
+                .pinned
+                .cmp(&left.pinned)
+                .then_with(|| right.created_at.cmp(&left.created_at))
+                .then_with(|| left.id.cmp(&right.id))
+        });
     }
 
     pub fn move_within_group(&mut self, id: PromptId, delta: i32) -> Result<bool> {
@@ -187,13 +187,13 @@ mod tests {
     }
 
     #[test]
-    fn add_appends_unpinned_at_end() {
+    fn add_orders_unpinned_newest_first() {
         let mut q = Queue::new();
         q.add(p("a"));
         q.add(p("b"));
         assert_eq!(
             q.iter().map(|p| p.text.as_str()).collect::<Vec<_>>(),
-            vec!["a", "b"]
+            vec!["b", "a"]
         );
     }
 
@@ -206,7 +206,7 @@ mod tests {
         pinned.pinned = true;
         q.add(pinned);
         let texts: Vec<_> = q.iter().map(|p| p.text.as_str()).collect();
-        assert_eq!(texts, vec!["zero", "one", "two"]);
+        assert_eq!(texts, vec!["zero", "two", "one"]);
     }
 
     #[test]
@@ -241,7 +241,7 @@ mod tests {
         q.add(p("c"));
         q.set_pinned(id, true).unwrap();
         let texts: Vec<_> = q.iter().map(|p| p.text.as_str()).collect();
-        assert_eq!(texts, vec!["b", "a", "c"]);
+        assert_eq!(texts, vec!["b", "c", "a"]);
     }
 
     #[test]
@@ -347,30 +347,25 @@ mod tests {
     #[test]
     fn move_within_group_swaps_within_unpinned() {
         let mut q = Queue::new();
-        let id0 = q.add_text("first").unwrap();
-        let _id1 = q.add_text("second").unwrap();
-        let _id2 = q.add_text("third").unwrap();
-        let result = q.move_within_group(id0, 1).unwrap();
+        q.add_text("first").unwrap();
+        q.add_text("second").unwrap();
+        let newest = q.add_text("third").unwrap();
+        let result = q.move_within_group(newest, 1).unwrap();
         assert!(result);
         let texts: Vec<_> = q.iter().map(|p| p.text.as_str()).collect();
-        assert_eq!(texts[0], "second");
-        assert_eq!(texts[1], "first");
-        assert_eq!(texts[2], "third");
+        assert_eq!(texts, vec!["second", "third", "first"]);
     }
 
     #[test]
     fn move_within_group_clamps_at_boundary() {
         let mut q = Queue::new();
-        let head_id = q.add_text("head").unwrap();
+        let oldest_id = q.add_text("oldest").unwrap();
         q.add_text("mid").unwrap();
-        let tail_id = q.add_text("tail").unwrap();
-        // Move head up — already at boundary
-        assert!(!q.move_within_group(head_id, -1).unwrap());
-        // Move tail down — already at boundary
-        assert!(!q.move_within_group(tail_id, 1).unwrap());
-        // Order unchanged
+        let newest_id = q.add_text("newest").unwrap();
+        assert!(!q.move_within_group(newest_id, -1).unwrap());
+        assert!(!q.move_within_group(oldest_id, 1).unwrap());
         let texts: Vec<_> = q.iter().map(|p| p.text.as_str()).collect();
-        assert_eq!(texts, vec!["head", "mid", "tail"]);
+        assert_eq!(texts, vec!["newest", "mid", "oldest"]);
     }
 
     #[test]
@@ -379,12 +374,12 @@ mod tests {
         let mut pin = p("pinned");
         pin.pinned = true;
         let pin_id = q.add(pin);
-        let unpin0_id = q.add_text("unpin-first").unwrap();
-        q.add_text("unpin-second").unwrap();
+        q.add_text("unpin-first").unwrap();
+        let unpinned_head_id = q.add_text("unpin-second").unwrap();
         // Moving the only pinned prompt down by 5 — single-item group, clamps to itself
         assert!(!q.move_within_group(pin_id, 5).unwrap());
         // Moving first unpinned up by 5 — clamps to unpinned-group head, no change
-        assert!(!q.move_within_group(unpin0_id, -5).unwrap());
+        assert!(!q.move_within_group(unpinned_head_id, -5).unwrap());
         // Invariant: pinned still first
         assert!(q.prompts[0].pinned);
         assert!(!q.prompts[1].pinned);

@@ -8,7 +8,9 @@ repository.workspace = true
 [dependencies]
 anyhow = { workspace = true }
 ratatui = { workspace = true }
+ratatui-textarea = { workspace = true }
 crossterm = { workspace = true }
+chrono = { workspace = true }
 qcli-core = { path = "../qcli-core" }
 qcli-platform = { path = "../qcli-platform" }
 

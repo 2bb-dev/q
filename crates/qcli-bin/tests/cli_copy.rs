@@ -8,7 +8,7 @@ fn q(dir: &TempDir) -> Command {
 }
 
 #[test]
-fn copy_next_stdout_prints_first_prompt_text() {
+fn copy_next_stdout_prints_newest_prompt_text() {
     let dir = TempDir::new().unwrap();
     q(&dir).args(["add", "alpha"]).assert().success();
     q(&dir).args(["add", "beta"]).assert().success();
@@ -16,7 +16,7 @@ fn copy_next_stdout_prints_first_prompt_text() {
         .args(["copy", "--next", "--stdout"])
         .assert()
         .success()
-        .stdout(predicates::str::starts_with("alpha"));
+        .stdout(predicates::str::starts_with("beta"));
 }
 
 #[test]

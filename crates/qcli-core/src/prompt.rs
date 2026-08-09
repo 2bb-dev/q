@@ -4,7 +4,7 @@ use uuid::Uuid;
 
 use crate::error::{CoreError, Result};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct PromptId(pub Uuid);
 
 #[allow(clippy::new_without_default)]
@@ -30,7 +30,7 @@ impl std::fmt::Display for PromptId {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Prompt {
     pub id: PromptId,
     pub text: String,

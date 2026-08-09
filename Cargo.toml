@@ -38,8 +38,9 @@ reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-feature
 tokio = { version = "1", features = ["full"] }
 
 # TUI
-ratatui = "0.29"
-crossterm = "0.28"
+ratatui = { version = "0.30", default-features = false, features = ["crossterm", "underline-color"] }
+ratatui-textarea = { version = "0.9", default-features = false }
+crossterm = "0.29"
 
 # Dev
 assert_cmd = "2"
