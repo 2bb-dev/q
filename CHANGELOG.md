@@ -4,6 +4,8 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-08-10
+
 ### Changed
 - Improved TUI composer responsiveness with batched input, bracketed paste, cursor-aware editing, and terminal-native navigation and deletion shortcuts
 - Allowed multiple editable TUI windows to stay synchronized without losing concurrent queue changes
@@ -13,6 +15,7 @@ All notable changes to this project will be documented in this file.
 - Renamed workspace crates from `qcli-*` to `q-*`, including `q-cli`, `q-core`, `q-platform`, and `q-tui`
 
 ### Added
+- Added a checksum-verifying installer for macOS, Linux, and Git Bash on Windows
 - Added named TUI workspace tabs with mouse and keyboard navigation, create/rename dialogs, per-tab queues, schema-v1 migration, and CLI `--tab` targeting
 - Added right-click tab actions for renaming and confirmed tab closure
 - Added mouse selection and focus for prompts and the composer
