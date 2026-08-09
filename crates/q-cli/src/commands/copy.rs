@@ -1,5 +1,5 @@
 use anyhow::{anyhow, Result};
-use qcli_platform::clipboard::{Clipboard, SystemClipboard};
+use q_platform::clipboard::{Clipboard, SystemClipboard};
 
 use super::with_workspace;
 

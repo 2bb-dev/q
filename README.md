@@ -25,7 +25,7 @@
 ```bash
 git clone https://github.com/2bb-dev/q.git
 cd q
-cargo install --path crates/qcli-bin
+cargo install --path crates/q-cli
 ```
 
 ## License

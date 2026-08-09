@@ -35,9 +35,8 @@ All three must pass cleanly. CI will enforce this.
 
 ### Architecture Rules
 
-- Only `qcli-platform` and `qcli-core::storage` may perform filesystem or OS operations.
-- Domain code in `qcli-core` must remain pure (no I/O).
-- Provider integrations go in `qcli-providers`.
+- Only `q-platform` and `q-core::storage` may perform filesystem or OS operations.
+- Domain code in `q-core` must remain pure (no I/O).
 
 ## Submitting Changes
 

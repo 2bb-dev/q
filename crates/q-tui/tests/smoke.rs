@@ -1,5 +1,5 @@
-use qcli_core::Queue;
-use qcli_tui::{reduce, App, Effect, Input, QueueMutation};
+use q_core::Queue;
+use q_tui::{reduce, App, Effect, Input, QueueMutation};
 
 #[test]
 fn end_to_end_reducer_flow() {

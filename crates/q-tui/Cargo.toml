@@ -1,5 +1,5 @@
 [package]
-name = "qcli-tui"
+name = "q-tui"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -11,9 +11,9 @@ ratatui = { workspace = true }
 ratatui-textarea = { workspace = true }
 crossterm = { workspace = true }
 chrono = { workspace = true }
-qcli-core = { path = "../qcli-core" }
-qcli-platform = { path = "../qcli-platform" }
+q-core = { path = "../q-core" }
+q-platform = { path = "../q-platform" }
 
 [dev-dependencies]
-qcli-platform = { path = "../qcli-platform", features = ["test-support"] }
+q-platform = { path = "../q-platform", features = ["test-support"] }
 tempfile = { workspace = true }

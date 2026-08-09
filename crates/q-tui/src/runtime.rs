@@ -12,8 +12,8 @@ use crossterm::{
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, Clear, ClearType},
 };
-use qcli_platform::clipboard::{Clipboard, SystemClipboard};
-use qcli_platform::lock::FileLock;
+use q_platform::clipboard::{Clipboard, SystemClipboard};
+use q_platform::lock::FileLock;
 use ratatui::{backend::CrosstermBackend, Terminal};
 use std::io::{self, Stdout};
 use std::path::Path;
@@ -29,7 +29,7 @@ const KEYBOARD_ENHANCEMENTS: KeyboardEnhancementFlags =
         .union(KeyboardEnhancementFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES);
 
 pub fn run(queue_path: &Path) -> Result<()> {
-    let queue = qcli_core::storage::load(queue_path)?;
+    let queue = q_core::storage::load(queue_path)?;
     let mut app = App::new(queue);
     let mut clipboard = SystemClipboard::new()?;
 
@@ -90,7 +90,7 @@ fn blink_timeout(elapsed: Duration) -> Duration {
 }
 
 struct QueueSync {
-    fingerprint: Option<qcli_core::storage::FileFingerprint>,
+    fingerprint: Option<q_core::storage::FileFingerprint>,
     last_check: Instant,
     last_reload: Instant,
 }
@@ -99,7 +99,7 @@ impl QueueSync {
     fn new(queue_path: &Path) -> Self {
         let now = Instant::now();
         Self {
-            fingerprint: qcli_core::storage::fingerprint(queue_path).ok().flatten(),
+            fingerprint: q_core::storage::fingerprint(queue_path).ok().flatten(),
             last_check: now,
             last_reload: now - FULL_RELOAD_INTERVAL,
         }
@@ -115,7 +115,7 @@ impl QueueSync {
         }
         self.last_check = Instant::now();
 
-        let fingerprint = match qcli_core::storage::fingerprint(queue_path) {
+        let fingerprint = match q_core::storage::fingerprint(queue_path) {
             Ok(fingerprint) => fingerprint,
             Err(error) => {
                 app.status = format!("sync failed: {error}");
@@ -127,7 +127,7 @@ impl QueueSync {
             return;
         }
 
-        match qcli_core::storage::load(queue_path) {
+        match q_core::storage::load(queue_path) {
             Ok(workspace) => {
                 app.replace_workspace(workspace);
                 self.fingerprint = fingerprint;
@@ -139,14 +139,14 @@ impl QueueSync {
 }
 
 enum MutationOutcome {
-    Committed(qcli_core::Workspace),
-    Rejected(qcli_core::Workspace, String),
+    Committed(q_core::Workspace),
+    Rejected(q_core::Workspace, String),
 }
 
 fn commit_mutation(queue_path: &Path, mutation: &QueueMutation) -> Result<MutationOutcome> {
     let mut lock = FileLock::open(&queue_path.with_extension("lock"))?;
     let _guard = lock.write()?;
-    let mut workspace = qcli_core::storage::load(queue_path)?;
+    let mut workspace = q_core::storage::load(queue_path)?;
 
     let result = match mutation {
         QueueMutation::Add { tab_id, prompt } => {
@@ -168,7 +168,7 @@ fn commit_mutation(queue_path: &Path, mutation: &QueueMutation) -> Result<Mutati
         return Ok(MutationOutcome::Rejected(workspace, error.to_string()));
     }
 
-    qcli_core::storage::save(queue_path, &workspace)?;
+    q_core::storage::save(queue_path, &workspace)?;
     Ok(MutationOutcome::Committed(workspace))
 }
 
@@ -577,12 +577,12 @@ mod tests {
     fn mouse_click_selects_tab_and_opens_create_dialog() {
         let dir = tempfile::TempDir::new().unwrap();
         let queue_path = dir.path().join("queue.json");
-        let mut workspace = qcli_core::Workspace::new();
+        let mut workspace = q_core::Workspace::new();
         let initial = workspace.first_tab_id();
         let target = workspace.create_tab("work").unwrap();
         let mut app = App::new(workspace);
         app.select_tab(initial);
-        let mut clipboard = qcli_platform::clipboard::FakeClipboard::new();
+        let mut clipboard = q_platform::clipboard::FakeClipboard::new();
         let area = ratatui::layout::Rect::new(2, 1, 6, 1);
         app.tab_hits = vec![crate::app::TabHit {
             area,
@@ -613,13 +613,13 @@ mod tests {
     fn left_click_focuses_prompt_and_composer() {
         let dir = tempfile::TempDir::new().unwrap();
         let queue_path = dir.path().join("queue.json");
-        let mut workspace = qcli_core::Workspace::new();
+        let mut workspace = q_core::Workspace::new();
         let tab = workspace.first_tab_id();
         workspace
-            .add_prompt(tab, qcli_core::Prompt::new("prompt").unwrap())
+            .add_prompt(tab, q_core::Prompt::new("prompt").unwrap())
             .unwrap();
         let mut app = App::new(workspace);
-        let mut clipboard = qcli_platform::clipboard::FakeClipboard::new();
+        let mut clipboard = q_platform::clipboard::FakeClipboard::new();
         let prompt_area = ratatui::layout::Rect::new(0, 3, 20, 1);
         let composer_area = ratatui::layout::Rect::new(0, 10, 20, 1);
         app.prompt_hits = vec![crate::app::PromptHit {
@@ -653,10 +653,10 @@ mod tests {
     fn right_click_tab_and_click_rename_opens_dialog() {
         let dir = tempfile::TempDir::new().unwrap();
         let queue_path = dir.path().join("queue.json");
-        let mut workspace = qcli_core::Workspace::new();
+        let mut workspace = q_core::Workspace::new();
         let target = workspace.create_tab("work").unwrap();
         let mut app = App::new(workspace);
-        let mut clipboard = qcli_platform::clipboard::FakeClipboard::new();
+        let mut clipboard = q_platform::clipboard::FakeClipboard::new();
         let tab_area = ratatui::layout::Rect::new(2, 1, 6, 1);
         app.tab_hits = vec![crate::app::TabHit {
             area: tab_area,
@@ -804,8 +804,8 @@ mod tests {
             let path = queue_path.clone();
             let barrier = Arc::clone(&barrier);
             handles.push(std::thread::spawn(move || {
-                let prompt = qcli_core::Prompt::new(text).unwrap();
-                let tab_id = qcli_core::Workspace::new().first_tab_id();
+                let prompt = q_core::Prompt::new(text).unwrap();
+                let tab_id = q_core::Workspace::new().first_tab_id();
                 barrier.wait();
                 commit_mutation(&path, &QueueMutation::Add { tab_id, prompt }).unwrap();
             }));
@@ -816,7 +816,7 @@ mod tests {
             handle.join().unwrap();
         }
 
-        let workspace = qcli_core::storage::load(&queue_path).unwrap();
+        let workspace = q_core::storage::load(&queue_path).unwrap();
         let texts: Vec<_> = workspace.tabs()[0]
             .queue()
             .iter()
@@ -831,14 +831,14 @@ mod tests {
     fn close_tab_mutation_is_persisted() {
         let dir = tempfile::TempDir::new().unwrap();
         let queue_path = dir.path().join("queue.json");
-        let mut workspace = qcli_core::Workspace::new();
+        let mut workspace = q_core::Workspace::new();
         let closed = workspace.create_tab("closed").unwrap();
-        qcli_core::storage::save(&queue_path, &workspace).unwrap();
+        q_core::storage::save(&queue_path, &workspace).unwrap();
 
         let outcome = commit_mutation(&queue_path, &QueueMutation::CloseTab(closed)).unwrap();
 
         assert!(matches!(outcome, MutationOutcome::Committed(_)));
-        let persisted = qcli_core::storage::load(&queue_path).unwrap();
+        let persisted = q_core::storage::load(&queue_path).unwrap();
         assert!(persisted.tab(closed).is_none());
         assert_eq!(persisted.tabs().len(), 1);
     }
@@ -847,16 +847,16 @@ mod tests {
     fn stale_mutation_returns_latest_queue_as_conflict() {
         let dir = tempfile::TempDir::new().unwrap();
         let queue_path = dir.path().join("queue.json");
-        let prompt = qcli_core::Prompt::new("remove me").unwrap();
+        let prompt = q_core::Prompt::new("remove me").unwrap();
         let id = prompt.id;
 
-        let tab_id = qcli_core::Workspace::new().first_tab_id();
+        let tab_id = q_core::Workspace::new().first_tab_id();
         commit_mutation(&queue_path, &QueueMutation::Add { tab_id, prompt }).unwrap();
         commit_mutation(&queue_path, &QueueMutation::Remove(id)).unwrap();
         let outcome = commit_mutation(&queue_path, &QueueMutation::Remove(id)).unwrap();
 
         assert!(matches!(outcome, MutationOutcome::Rejected(_, _)));
-        assert!(qcli_core::storage::load(&queue_path)
+        assert!(q_core::storage::load(&queue_path)
             .unwrap()
             .get_prompt(id)
             .is_none());
@@ -866,17 +866,17 @@ mod tests {
     fn external_refresh_preserves_composer_state() {
         let dir = tempfile::TempDir::new().unwrap();
         let queue_path = dir.path().join("queue.json");
-        let mut app = App::new(qcli_core::Queue::new());
+        let mut app = App::new(q_core::Queue::new());
         app.composer.set_text("local draft");
         app.focus = Pane::Composer;
         let mut sync = QueueSync::new(&queue_path);
 
-        let mut external = qcli_core::Workspace::new();
+        let mut external = q_core::Workspace::new();
         let tab_id = external.first_tab_id();
         external
-            .add_prompt(tab_id, qcli_core::Prompt::new("external prompt").unwrap())
+            .add_prompt(tab_id, q_core::Prompt::new("external prompt").unwrap())
             .unwrap();
-        qcli_core::storage::save(&queue_path, &external).unwrap();
+        q_core::storage::save(&queue_path, &external).unwrap();
         sync.last_check = Instant::now() - SYNC_INTERVAL;
         sync.refresh_if_due(&mut app, &queue_path);
 

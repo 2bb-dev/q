@@ -1,7 +1,7 @@
 use std::io::Read;
 
 use anyhow::Result;
-use qcli_core::Prompt;
+use q_core::Prompt;
 
 use super::with_workspace_mut;
 

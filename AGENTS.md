@@ -10,11 +10,10 @@ The full policy lives in [CLAUDE.md](./CLAUDE.md). This file exists so agents th
 
 `q` is a native terminal queue for prompts, tasks, and text snippets. The original desktop app lives in [`q-desktop`](https://github.com/2bb-dev/q-desktop). The codebase is a Rust Cargo workspace:
 
-- `qcli-core` -- queue domain, persistence.
-- `qcli-platform` -- app dirs, file locking, clipboard.
-- `qcli-providers` -- OpenAI, Anthropic, Codex integrations.
-- `qcli-tui` -- `ratatui` + `crossterm` UI shell.
-- `qcli-bin` -- the `q` binary, thin orchestration over the above.
+- `q-core` -- queue domain, persistence.
+- `q-platform` -- app dirs, file locking, clipboard.
+- `q-tui` -- `ratatui` + `crossterm` UI shell.
+- `q-cli` -- the `q` binary, thin orchestration over the above.
 
 Private planning docs are not tracked in this repository.
 
@@ -85,8 +84,8 @@ For multi-step tasks, state a brief plan:
 - **Dependencies**: declare at the workspace level in the root `Cargo.toml`; crates reference them with `{ workspace = true }`.
 - **Error types**: `thiserror` for library crates, `anyhow` for the binary crate.
 - **No `unwrap()` or `expect()` outside tests.**
-- **I/O boundaries**: only `qcli-platform` and `qcli-core::storage` touch the filesystem or OS APIs. Domain code stays pure.
-- **Tests**: unit tests live next to the code (`mod tests`). Integration tests live in `crates/qcli-bin/tests/`.
+- **I/O boundaries**: only `q-platform` and `q-core::storage` touch the filesystem or OS APIs. Domain code stays pure.
+- **Tests**: unit tests live next to the code (`mod tests`). Integration tests live in `crates/q-cli/tests/`.
 
 ---
 

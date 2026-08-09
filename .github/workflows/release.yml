@@ -43,7 +43,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - name: Build
-        run: cargo build --release --target ${{ matrix.target }} -p qcli-bin
+        run: cargo build --release --target ${{ matrix.target }} -p q-cli
 
       - name: Package (unix)
         if: matrix.platform != 'windows-latest'

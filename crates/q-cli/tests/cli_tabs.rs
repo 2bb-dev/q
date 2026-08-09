@@ -1,6 +1,6 @@
 use assert_cmd::Command;
 use predicates::prelude::PredicateBooleanExt;
-use qcli_core::{storage, Prompt, Workspace};
+use q_core::{storage, Prompt, Workspace};
 use tempfile::TempDir;
 
 fn q(dir: &TempDir) -> Command {
@@ -9,7 +9,7 @@ fn q(dir: &TempDir) -> Command {
     command
 }
 
-fn workspace_with_two_tabs(dir: &TempDir) -> (qcli_core::TabId, qcli_core::TabId) {
+fn workspace_with_two_tabs(dir: &TempDir) -> (q_core::TabId, q_core::TabId) {
     let mut workspace = Workspace::new();
     let first = workspace.first_tab_id();
     workspace.rename_tab(first, "backend").unwrap();

@@ -3,7 +3,7 @@ use crate::app::{
     TabDialogMode, TabMenuAction,
 };
 use chrono::Utc;
-use qcli_core::{Prompt, TabId};
+use q_core::{Prompt, TabId};
 use ratatui_textarea::CursorMove;
 
 pub fn reduce(app: &mut App, input: Input) -> Option<Effect> {
@@ -318,7 +318,7 @@ fn reclamp_selection(app: &mut App) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use qcli_core::Workspace;
+    use q_core::Workspace;
 
     fn app_with(n: usize) -> App {
         let mut workspace = Workspace::new();

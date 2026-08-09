@@ -1,5 +1,5 @@
 use chrono::{DateTime, Utc};
-use qcli_core::{Prompt, PromptId, TabId, Workspace};
+use q_core::{Prompt, PromptId, TabId, Workspace};
 use ratatui::{
     layout::Rect,
     style::{Modifier, Style},
@@ -454,7 +454,7 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use qcli_core::Queue;
+    use q_core::Queue;
 
     #[test]
     fn new_app_has_queue_focus_and_selects_first_prompt() {

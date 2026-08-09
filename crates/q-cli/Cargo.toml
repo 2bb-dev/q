@@ -1,5 +1,5 @@
 [package]
-name = "qcli-bin"
+name = "q-cli"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -13,10 +13,9 @@ path = "src/main.rs"
 anyhow = { workspace = true }
 clap = { workspace = true }
 serde_json = { workspace = true }
-qcli-core = { path = "../qcli-core" }
-qcli-platform = { path = "../qcli-platform" }
-qcli-providers = { path = "../qcli-providers" }
-qcli-tui = { path = "../qcli-tui" }
+q-core = { path = "../q-core" }
+q-platform = { path = "../q-platform" }
+q-tui = { path = "../q-tui" }
 
 [dev-dependencies]
 assert_cmd = { workspace = true }

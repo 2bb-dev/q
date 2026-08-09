@@ -378,7 +378,7 @@ fn dim() -> Style {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use qcli_core::{Prompt, Workspace};
+    use q_core::{Prompt, Workspace};
     use ratatui::{backend::TestBackend, buffer::Buffer, Terminal};
 
     fn buffer_as_text(buffer: &Buffer) -> String {
