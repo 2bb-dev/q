@@ -1,4 +1,4 @@
-use crate::app::{App, Pane, TabHit, TabHitTarget};
+use crate::app::{App, Pane, PromptHit, TabHit, TabHitTarget, TabMenuAction, TabMenuHit};
 use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
@@ -9,6 +9,7 @@ use ratatui::{
 
 const ACCENT: Color = Color::Cyan;
 const MUTED: Color = Color::DarkGray;
+const TAB_BAR_BG: Color = Color::Rgb(32, 32, 32);
 const CREATE_WIDTH: u16 = 3;
 
 pub fn draw(frame: &mut Frame, app: &mut App, cursor_on: bool) {
@@ -32,7 +33,9 @@ pub fn draw(frame: &mut Frame, app: &mut App, cursor_on: bool) {
     render_queue(frame, app, outer[3]);
     render_composer(frame, app, cursor_on, outer[5]);
     render_footer(frame, app, outer[7]);
+    render_tab_menu(frame, app);
     render_tab_dialog(frame, app, cursor_on);
+    render_close_tab_dialog(frame, app);
 }
 
 fn composer_height(lines: &[String], term_width: u16, term_height: u16) -> u16 {
@@ -53,6 +56,11 @@ fn render_tabs(frame: &mut Frame, app: &mut App, area: Rect) {
     if area.width == 0 {
         return;
     }
+
+    frame.render_widget(
+        Paragraph::new("").style(Style::default().bg(TAB_BAR_BG)),
+        area,
+    );
 
     let tabs: Vec<_> = app
         .workspace
@@ -84,11 +92,12 @@ fn render_tabs(frame: &mut Frame, app: &mut App, area: Rect) {
     }
 
     let mut x = area.x;
+    let content_right = area.right().saturating_sub(CREATE_WIDTH);
     for index in start..end {
-        if x >= area.right().saturating_sub(CREATE_WIDTH) {
+        if x >= content_right {
             break;
         }
-        let width = widths[index].min(area.right().saturating_sub(CREATE_WIDTH + x));
+        let width = widths[index].min(content_right.saturating_sub(x));
         if width == 0 {
             continue;
         }
@@ -102,7 +111,7 @@ fn render_tabs(frame: &mut Frame, app: &mut App, area: Rect) {
                 .bg(ACCENT)
                 .add_modifier(Modifier::BOLD)
         } else {
-            dim()
+            Style::default().fg(Color::Gray).bg(TAB_BAR_BG)
         };
         frame.render_widget(
             Paragraph::new(format!(" {clipped} ")).style(style),
@@ -115,10 +124,14 @@ fn render_tabs(frame: &mut Frame, app: &mut App, area: Rect) {
         x = x.saturating_add(width);
     }
 
-    let create_x = area.right().saturating_sub(CREATE_WIDTH);
-    let create_area = Rect::new(create_x, area.y, CREATE_WIDTH.min(area.width), 1);
+    let create_area = Rect::new(
+        x,
+        area.y,
+        CREATE_WIDTH.min(area.right().saturating_sub(x)),
+        1,
+    );
     frame.render_widget(
-        Paragraph::new(" + ").style(Style::default().fg(ACCENT)),
+        Paragraph::new(" + ").style(Style::default().fg(ACCENT).bg(TAB_BAR_BG)),
         create_area,
     );
     app.tab_hits.push(TabHit {
@@ -127,23 +140,40 @@ fn render_tabs(frame: &mut Frame, app: &mut App, area: Rect) {
     });
 }
 
-fn render_queue(frame: &mut Frame, app: &App, area: Rect) {
-    let focused = app.focus == Pane::Queue && app.tab_dialog.is_none();
+fn render_queue(frame: &mut Frame, app: &mut App, area: Rect) {
+    app.prompt_hits.clear();
+    let focused = app.focus == Pane::Queue && !app.dialog_open() && app.tab_menu.is_none();
     let prompts = app.visible_prompts();
     let mut lines = Vec::new();
+    let mut hits = Vec::new();
+    let mut visual_row = 0;
 
     for (index, prompt) in prompts.iter().enumerate() {
         if index > 0 {
             lines.push(Line::raw(""));
+            visual_row += 1;
         }
-        lines.push(row_line(
-            index,
-            app.selected,
-            focused,
-            prompt.pinned,
-            &prompt.text,
-        ));
+        let line = row_line(index, app.selected, focused, prompt.pinned, &prompt.text);
+        let row_height = if area.width == 0 {
+            0
+        } else {
+            (line.width() as u16).div_ceil(area.width).max(1)
+        };
+        if visual_row < area.height && row_height > 0 {
+            hits.push(PromptHit {
+                area: Rect::new(
+                    area.x,
+                    area.y + visual_row,
+                    area.width,
+                    row_height.min(area.height - visual_row),
+                ),
+                index,
+            });
+        }
+        visual_row = visual_row.saturating_add(row_height);
+        lines.push(line);
     }
+    app.prompt_hits = hits;
     frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), area);
 }
 
@@ -182,7 +212,8 @@ fn row_line(
 }
 
 fn render_composer(frame: &mut Frame, app: &mut App, cursor_on: bool, area: Rect) {
-    let focused = app.focus == Pane::Composer && app.tab_dialog.is_none();
+    app.composer_area = Some(area);
+    let focused = app.focus == Pane::Composer && !app.dialog_open() && app.tab_menu.is_none();
     let prefix_style = if focused {
         Style::default().fg(ACCENT)
     } else {
@@ -205,11 +236,60 @@ fn render_composer(frame: &mut Frame, app: &mut App, cursor_on: bool, area: Rect
 
 fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
     let hints = if app.status.is_empty() {
-        "[ ] tabs  ·  ^t new  ·  r rename  ·  p pin  ·  e edit  ·  tab switch"
+        "p pin  ·  e edit  ·  tab switch"
     } else {
         app.status.as_str()
     };
     frame.render_widget(Paragraph::new(Line::styled(hints, dim())), area);
+}
+
+fn render_tab_menu(frame: &mut Frame, app: &mut App) {
+    app.tab_menu_hits.clear();
+    let Some(menu) = &app.tab_menu else {
+        return;
+    };
+    let frame_area = frame.area();
+    let width = 12.min(frame_area.width);
+    let height = 4.min(frame_area.height);
+    let x = menu.column.min(frame_area.right().saturating_sub(width));
+    let y = menu
+        .row
+        .saturating_add(1)
+        .min(frame_area.bottom().saturating_sub(height));
+    let area = Rect::new(x, y, width, height);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(MUTED));
+    let inner = block.inner(area);
+    frame.render_widget(Clear, area);
+    frame.render_widget(block, area);
+
+    let actions = [
+        (TabMenuAction::Rename, " Rename"),
+        (TabMenuAction::Close, " Close"),
+    ];
+    let lines: Vec<_> = actions
+        .iter()
+        .map(|(action, label)| {
+            let style = if menu.selected == *action {
+                Style::default().add_modifier(Modifier::REVERSED)
+            } else {
+                Style::default()
+            };
+            Line::styled(*label, style)
+        })
+        .collect();
+    frame.render_widget(Paragraph::new(lines), inner);
+
+    for (index, (action, _)) in actions.iter().enumerate() {
+        if index as u16 >= inner.height {
+            break;
+        }
+        app.tab_menu_hits.push(TabMenuHit {
+            area: Rect::new(inner.x, inner.y + index as u16, inner.width, 1),
+            action: *action,
+        });
+    }
 }
 
 fn render_tab_dialog(frame: &mut Frame, app: &App, cursor_on: bool) {
@@ -252,6 +332,34 @@ fn render_tab_dialog(frame: &mut Frame, app: &App, cursor_on: bool) {
     }
     lines.push(Line::styled("Enter save · Esc cancel", dim()));
     frame.render_widget(Paragraph::new(lines).alignment(Alignment::Left), inner);
+}
+
+fn render_close_tab_dialog(frame: &mut Frame, app: &App) {
+    let Some(dialog) = &app.close_tab_dialog else {
+        return;
+    };
+    let area = frame.area();
+    if area.width < 8 || area.height < 7 {
+        return;
+    }
+    let width = area.width.saturating_sub(4).clamp(8, 52);
+    let dialog_area = centered_rect(width, 7, area);
+    let block = Block::default()
+        .title(" Close tab ")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Red));
+    let inner = block.inner(dialog_area);
+    frame.render_widget(Clear, dialog_area);
+    frame.render_widget(block, dialog_area);
+    frame.render_widget(
+        Paragraph::new(vec![
+            Line::raw(format!("Close \"{}\"?", dialog.tab_name)),
+            Line::raw(""),
+            Line::styled("This deletes all prompts in this tab.", dim()),
+            Line::styled("Enter close · Esc cancel", dim()),
+        ]),
+        inner,
+    );
 }
 
 fn centered_rect(width: u16, height: u16, area: Rect) -> Rect {
@@ -297,7 +405,10 @@ mod tests {
         assert!(text.contains(" 1 "), "missing initial tab; got:\n{text}");
         assert!(text.contains(" + "), "missing create tab; got:\n{text}");
         assert!(text.contains("type a prompt"));
-        assert!(text.contains("^t new"));
+        assert!(text.contains("p pin"));
+        assert!(!text.contains("[ ] tabs"));
+        assert!(!text.contains("^t new"));
+        assert!(!text.contains("r rename"));
     }
 
     #[test]
@@ -319,6 +430,39 @@ mod tests {
     }
 
     #[test]
+    fn tab_context_menu_renders_rename_and_close_targets() {
+        let mut app = App::new(Workspace::new());
+        let id = app.active_tab_id;
+        app.tab_menu = Some(crate::app::TabContextMenu {
+            tab_id: id,
+            column: 2,
+            row: 1,
+            selected: TabMenuAction::Rename,
+        });
+
+        let text = render(&mut app, false, 80);
+
+        assert!(text.contains("Rename"));
+        assert!(text.contains("Close"));
+        assert_eq!(app.tab_menu_hits.len(), 2);
+    }
+
+    #[test]
+    fn close_tab_confirmation_warns_about_prompt_deletion() {
+        let mut app = App::new(Workspace::new());
+        app.close_tab_dialog = Some(crate::app::CloseTabDialog {
+            tab_id: app.active_tab_id,
+            tab_name: "work".to_string(),
+        });
+
+        let text = render(&mut app, false, 80);
+
+        assert!(text.contains("Close \"work\"?"));
+        assert!(text.contains("deletes all prompts"));
+        assert!(text.contains("Enter close"));
+    }
+
+    #[test]
     fn tab_dialog_renders_value_and_error() {
         let mut app = App::new(Workspace::new());
         let mut dialog = crate::app::TabDialog::create();
@@ -332,6 +476,51 @@ mod tests {
     }
 
     #[test]
+    fn rendered_prompts_and_composer_have_click_targets() {
+        let mut workspace = Workspace::new();
+        let tab = workspace.first_tab_id();
+        workspace
+            .add_prompt(tab, Prompt::new("click me").unwrap())
+            .unwrap();
+        let mut app = App::new(workspace);
+
+        render(&mut app, false, 80);
+
+        let prompt_area = app.prompt_hits[0].area;
+        assert_eq!(
+            app.content_input_at(prompt_area.x, prompt_area.y),
+            Some(crate::app::Input::SelectPrompt(0))
+        );
+        let composer_area = app.composer_area.unwrap();
+        assert_eq!(
+            app.content_input_at(composer_area.x, composer_area.y),
+            Some(crate::app::Input::FocusComposer)
+        );
+    }
+
+    #[test]
+    fn wrapped_prompt_is_clickable_across_its_rendered_height() {
+        let mut workspace = Workspace::new();
+        let tab = workspace.first_tab_id();
+        workspace
+            .add_prompt(
+                tab,
+                Prompt::new("a prompt long enough to wrap across rows").unwrap(),
+            )
+            .unwrap();
+        let mut app = App::new(workspace);
+
+        render(&mut app, false, 12);
+
+        let area = app.prompt_hits[0].area;
+        assert!(area.height > 1);
+        assert_eq!(
+            app.content_input_at(area.x, area.bottom() - 1),
+            Some(crate::app::Input::SelectPrompt(0))
+        );
+    }
+
+    #[test]
     fn rendered_tabs_and_create_button_have_click_targets() {
         let mut app = App::new(Workspace::new());
         render(&mut app, false, 80);
@@ -339,6 +528,16 @@ mod tests {
         for hit in &app.tab_hits {
             assert!(app.tab_input_at(hit.area.x, hit.area.y).is_some());
         }
+        assert_eq!(app.tab_hits[0].area.right(), app.tab_hits[1].area.x);
+    }
+
+    #[test]
+    fn tab_bar_has_a_full_width_background() {
+        let mut app = App::new(Workspace::new());
+        let mut terminal = Terminal::new(TestBackend::new(40, 20)).unwrap();
+        terminal.draw(|frame| draw(frame, &mut app, false)).unwrap();
+
+        assert_eq!(terminal.backend().buffer()[(39, 1)].bg, TAB_BAR_BG);
     }
 
     #[test]

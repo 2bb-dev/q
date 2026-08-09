@@ -9,9 +9,12 @@ All notable changes to this project will be documented in this file.
 - Allowed multiple editable TUI windows to stay synchronized without losing concurrent queue changes
 - Made `q` launch the TUI by default while retaining `q tui` as an explicit alias
 - Ordered tabs by recent prompt activity and prompts newest-first within pinned and unpinned groups
+- Styled the full tab row and placed the `+` action directly beside visible tabs
 
 ### Added
 - Added named TUI workspace tabs with mouse and keyboard navigation, create/rename dialogs, per-tab queues, schema-v1 migration, and CLI `--tab` targeting
+- Added right-click tab actions for renaming and confirmed tab closure
+- Added mouse selection and focus for prompts and the composer
 - Core queue domain model with newest-first ordering and pinning
 - JSON persistence via `qcli-core::storage`
 - CLI commands: `add`, `list`, `copy`, `pop`, `pin`, `unpin`

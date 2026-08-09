@@ -40,8 +40,13 @@ pub enum Input {
     PreviousTab,
     NextTab,
     SelectTab(TabId),
+    SelectPrompt(usize),
+    FocusComposer,
     OpenCreateTab,
     OpenRenameTab,
+    OpenTabMenu { id: TabId, column: u16, row: u16 },
+    SelectTabMenuAction(TabMenuAction),
+    DismissTabMenu,
     CtrlS,
     Esc,
     Quit,
@@ -67,6 +72,7 @@ pub enum QueueMutation {
         id: TabId,
         name: String,
     },
+    CloseTab(TabId),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -85,6 +91,26 @@ pub enum Effect {
 pub enum TabDialogMode {
     Create,
     Rename(TabId),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TabMenuAction {
+    Rename,
+    Close,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TabContextMenu {
+    pub tab_id: TabId,
+    pub column: u16,
+    pub row: u16,
+    pub selected: TabMenuAction,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CloseTabDialog {
+    pub tab_id: TabId,
+    pub tab_name: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -250,6 +276,18 @@ pub(crate) struct TabHit {
     pub target: TabHitTarget,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct TabMenuHit {
+    pub area: Rect,
+    pub action: TabMenuAction,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct PromptHit {
+    pub area: Rect,
+    pub index: usize,
+}
+
 pub struct App {
     pub workspace: Workspace,
     pub active_tab_id: TabId,
@@ -257,8 +295,13 @@ pub struct App {
     pub selected: Option<usize>,
     pub composer: ComposerEditor,
     pub tab_dialog: Option<TabDialog>,
+    pub tab_menu: Option<TabContextMenu>,
+    pub close_tab_dialog: Option<CloseTabDialog>,
     pub status: String,
     pub(crate) tab_hits: Vec<TabHit>,
+    pub(crate) tab_menu_hits: Vec<TabMenuHit>,
+    pub(crate) prompt_hits: Vec<PromptHit>,
+    pub(crate) composer_area: Option<Rect>,
 }
 
 impl App {
@@ -276,8 +319,13 @@ impl App {
             workspace,
             composer: ComposerEditor::default(),
             tab_dialog: None,
+            tab_menu: None,
+            close_tab_dialog: None,
             status: String::new(),
             tab_hits: Vec::new(),
+            tab_menu_hits: Vec::new(),
+            prompt_hits: Vec::new(),
+            composer_area: None,
         }
     }
 
@@ -316,6 +364,27 @@ impl App {
             .map(|_| active_tab_id)
             .unwrap_or_else(|| self.workspace.first_tab_id());
 
+        if matches!(
+            self.tab_dialog.as_ref().map(|dialog| dialog.mode),
+            Some(TabDialogMode::Rename(id)) if self.workspace.tab(id).is_none()
+        ) {
+            self.tab_dialog = None;
+        }
+        if self
+            .tab_menu
+            .as_ref()
+            .is_some_and(|menu| self.workspace.tab(menu.tab_id).is_none())
+        {
+            self.tab_menu = None;
+        }
+        if self
+            .close_tab_dialog
+            .as_ref()
+            .is_some_and(|dialog| self.workspace.tab(dialog.tab_id).is_none())
+        {
+            self.close_tab_dialog = None;
+        }
+
         self.selected = selected_id
             .and_then(|id| {
                 self.visible_prompts()
@@ -339,6 +408,46 @@ impl App {
                 TabHitTarget::Tab(id) => Input::SelectTab(id),
                 TabHitTarget::Create => Input::OpenCreateTab,
             })
+    }
+
+    pub(crate) fn tab_id_at(&self, column: u16, row: u16) -> Option<TabId> {
+        self.tab_hits.iter().find_map(|hit| {
+            let contains = hit
+                .area
+                .contains(ratatui::layout::Position::new(column, row));
+            match (contains, hit.target) {
+                (true, TabHitTarget::Tab(id)) => Some(id),
+                _ => None,
+            }
+        })
+    }
+
+    pub(crate) fn content_input_at(&self, column: u16, row: u16) -> Option<Input> {
+        let position = ratatui::layout::Position::new(column, row);
+        if let Some(hit) = self
+            .prompt_hits
+            .iter()
+            .find(|hit| hit.area.contains(position))
+        {
+            return Some(Input::SelectPrompt(hit.index));
+        }
+        self.composer_area
+            .filter(|area| area.contains(position))
+            .map(|_| Input::FocusComposer)
+    }
+
+    pub(crate) fn tab_menu_input_at(&self, column: u16, row: u16) -> Option<Input> {
+        self.tab_menu_hits
+            .iter()
+            .find(|hit| {
+                hit.area
+                    .contains(ratatui::layout::Position::new(column, row))
+            })
+            .map(|hit| Input::SelectTabMenuAction(hit.action))
+    }
+
+    pub(crate) fn dialog_open(&self) -> bool {
+        self.tab_dialog.is_some() || self.close_tab_dialog.is_some()
     }
 }
 

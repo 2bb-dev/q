@@ -1,4 +1,7 @@
-use crate::app::{App, Effect, Input, Pane, QueueMutation, TabDialog, TabDialogMode};
+use crate::app::{
+    App, CloseTabDialog, Effect, Input, Pane, QueueMutation, TabContextMenu, TabDialog,
+    TabDialogMode, TabMenuAction,
+};
 use chrono::Utc;
 use qcli_core::{Prompt, TabId};
 use ratatui_textarea::CursorMove;
@@ -7,8 +10,25 @@ pub fn reduce(app: &mut App, input: Input) -> Option<Effect> {
     if matches!(input, Input::Quit) {
         return Some(Effect::Quit);
     }
+    if let Input::OpenTabMenu { id, column, row } = &input {
+        if app.workspace.tab(*id).is_some() && !app.dialog_open() {
+            app.tab_menu = Some(TabContextMenu {
+                tab_id: *id,
+                column: *column,
+                row: *row,
+                selected: TabMenuAction::Rename,
+            });
+        }
+        return None;
+    }
+    if app.close_tab_dialog.is_some() {
+        return reduce_close_tab_dialog(app, input);
+    }
     if app.tab_dialog.is_some() {
         return reduce_dialog(app, input);
+    }
+    if app.tab_menu.is_some() {
+        return reduce_tab_menu(app, input);
     }
 
     match input {
@@ -18,6 +38,17 @@ pub fn reduce(app: &mut App, input: Input) -> Option<Effect> {
         }
         Input::SelectTab(id) => {
             app.select_tab(id);
+            return None;
+        }
+        Input::SelectPrompt(index) => {
+            if index < app.visible_prompts().len() {
+                app.selected = Some(index);
+                app.focus = Pane::Queue;
+            }
+            return None;
+        }
+        Input::FocusComposer => {
+            app.focus = Pane::Composer;
             return None;
         }
         Input::PreviousTab => {
@@ -42,6 +73,75 @@ pub fn reduce(app: &mut App, input: Input) -> Option<Effect> {
         Pane::Queue => reduce_queue(app, input),
         Pane::Composer => reduce_composer(app, input),
     }
+}
+
+fn reduce_tab_menu(app: &mut App, input: Input) -> Option<Effect> {
+    match input {
+        Input::Up => app.tab_menu.as_mut()?.selected = TabMenuAction::Rename,
+        Input::Down => app.tab_menu.as_mut()?.selected = TabMenuAction::Close,
+        Input::Enter => {
+            let action = app.tab_menu.as_ref()?.selected;
+            return activate_tab_menu_action(app, action);
+        }
+        Input::SelectTabMenuAction(action) => return activate_tab_menu_action(app, action),
+        Input::Esc | Input::DismissTabMenu => app.tab_menu = None,
+        _ => {}
+    }
+    None
+}
+
+fn activate_tab_menu_action(app: &mut App, action: TabMenuAction) -> Option<Effect> {
+    let menu = app.tab_menu.take()?;
+    let tab = app.workspace.tab(menu.tab_id)?;
+    match action {
+        TabMenuAction::Rename => {
+            app.tab_dialog = Some(TabDialog::rename(tab.id(), tab.name()));
+        }
+        TabMenuAction::Close => {
+            if app.workspace.tabs().len() == 1 {
+                app.status = "cannot close the last tab".to_string();
+            } else {
+                app.close_tab_dialog = Some(CloseTabDialog {
+                    tab_id: tab.id(),
+                    tab_name: tab.name().to_string(),
+                });
+            }
+        }
+    }
+    None
+}
+
+fn reduce_close_tab_dialog(app: &mut App, input: Input) -> Option<Effect> {
+    match input {
+        Input::Esc => {
+            app.close_tab_dialog = None;
+            None
+        }
+        Input::Enter => confirm_close_tab(app),
+        _ => None,
+    }
+}
+
+fn confirm_close_tab(app: &mut App) -> Option<Effect> {
+    let dialog = app.close_tab_dialog.take()?;
+    let replacement = if app.active_tab_id == dialog.tab_id {
+        let tabs = app.workspace.tabs();
+        let index = tabs.iter().position(|tab| tab.id() == dialog.tab_id)?;
+        tabs.get(index + 1)
+            .or_else(|| index.checked_sub(1).and_then(|previous| tabs.get(previous)))
+            .map(|tab| tab.id())
+    } else {
+        Some(app.active_tab_id)
+    };
+
+    if let Err(error) = app.workspace.close_tab(dialog.tab_id) {
+        app.status = error.to_string();
+        return None;
+    }
+    if let Some(id) = replacement {
+        app.select_tab(id);
+    }
+    Some(Effect::Persist(QueueMutation::CloseTab(dialog.tab_id)))
 }
 
 fn reduce_dialog(app: &mut App, input: Input) -> Option<Effect> {
@@ -232,6 +332,20 @@ mod tests {
     }
 
     #[test]
+    fn mouse_inputs_focus_prompt_and_composer() {
+        let mut app = app_with(2);
+        app.focus = Pane::Composer;
+
+        reduce(&mut app, Input::SelectPrompt(1));
+        assert_eq!(app.focus, Pane::Queue);
+        assert_eq!(app.selected, Some(1));
+
+        reduce(&mut app, Input::FocusComposer);
+        assert_eq!(app.focus, Pane::Composer);
+        assert_eq!(app.selected, Some(1));
+    }
+
+    #[test]
     fn tab_cycles_focus() {
         let mut app = app_with(1);
         reduce(&mut app, Input::Tab);
@@ -359,6 +473,88 @@ mod tests {
         );
         assert_eq!(app.workspace.tab(id).unwrap().name(), "work");
         assert_eq!(app.workspace.first_tab_id(), id);
+    }
+
+    #[test]
+    fn tab_menu_rename_opens_rename_dialog_for_target_tab() {
+        let mut app = app_with(0);
+        let target = app.workspace.create_tab("work").unwrap();
+        reduce(
+            &mut app,
+            Input::OpenTabMenu {
+                id: target,
+                column: 4,
+                row: 1,
+            },
+        );
+
+        reduce(&mut app, Input::SelectTabMenuAction(TabMenuAction::Rename));
+
+        let dialog = app.tab_dialog.as_ref().unwrap();
+        assert_eq!(dialog.mode, TabDialogMode::Rename(target));
+        assert_eq!(dialog.value, "work");
+        assert!(app.tab_menu.is_none());
+    }
+
+    #[test]
+    fn closing_active_tab_requires_confirmation_and_selects_neighbor() {
+        let mut app = app_with(0);
+        let remaining = app.active_tab_id;
+        let closed = app.workspace.create_tab("closed").unwrap();
+        app.select_tab(closed);
+        reduce(
+            &mut app,
+            Input::OpenTabMenu {
+                id: closed,
+                column: 4,
+                row: 1,
+            },
+        );
+        reduce(&mut app, Input::SelectTabMenuAction(TabMenuAction::Close));
+
+        assert!(app.workspace.tab(closed).is_some());
+        assert_eq!(app.close_tab_dialog.as_ref().unwrap().tab_id, closed);
+
+        assert_eq!(
+            reduce(&mut app, Input::Enter),
+            Some(Effect::Persist(QueueMutation::CloseTab(closed)))
+        );
+        assert!(app.workspace.tab(closed).is_none());
+        assert_eq!(app.active_tab_id, remaining);
+    }
+
+    #[test]
+    fn escape_cancels_tab_close() {
+        let mut app = app_with(0);
+        let closed = app.workspace.create_tab("closed").unwrap();
+        app.close_tab_dialog = Some(CloseTabDialog {
+            tab_id: closed,
+            tab_name: "closed".to_string(),
+        });
+
+        assert_eq!(reduce(&mut app, Input::Esc), None);
+
+        assert!(app.close_tab_dialog.is_none());
+        assert!(app.workspace.tab(closed).is_some());
+    }
+
+    #[test]
+    fn tab_menu_does_not_offer_confirmation_for_last_tab() {
+        let mut app = app_with(0);
+        let only = app.active_tab_id;
+        reduce(
+            &mut app,
+            Input::OpenTabMenu {
+                id: only,
+                column: 4,
+                row: 1,
+            },
+        );
+
+        reduce(&mut app, Input::SelectTabMenuAction(TabMenuAction::Close));
+
+        assert!(app.close_tab_dialog.is_none());
+        assert_eq!(app.status, "cannot close the last tab");
     }
 
     #[test]

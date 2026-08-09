@@ -162,6 +162,7 @@ fn commit_mutation(queue_path: &Path, mutation: &QueueMutation) -> Result<Mutati
             .create_tab_with(*id, name.clone(), *activity_at)
             .map(|_| ()),
         QueueMutation::RenameTab { id, name } => workspace.rename_tab(*id, name.clone()),
+        QueueMutation::CloseTab(id) => workspace.close_tab(*id),
     };
     if let Err(error) = result {
         return Ok(MutationOutcome::Rejected(workspace, error.to_string()));
@@ -206,17 +207,42 @@ fn handle_event(
     queue_path: &Path,
 ) -> Result<bool> {
     let input = match event {
-        Event::Key(key) if matches!(key.kind, KeyEventKind::Press | KeyEventKind::Repeat) => {
-            map_key(key, app.focus, app.tab_dialog.is_some())
+        Event::Key(key)
+            if matches!(key.kind, KeyEventKind::Press | KeyEventKind::Repeat)
+                && app.tab_menu.is_some() =>
+        {
+            map_tab_menu_key(key)
         }
-        Event::Paste(text) if app.focus == Pane::Composer && app.tab_dialog.is_none() => {
+        Event::Key(key) if matches!(key.kind, KeyEventKind::Press | KeyEventKind::Repeat) => {
+            map_key(key, app.focus, app.dialog_open())
+        }
+        Event::Paste(text)
+            if app.focus == Pane::Composer && !app.dialog_open() && app.tab_menu.is_none() =>
+        {
             Some(Input::Paste(text))
         }
         Event::Mouse(mouse)
-            if matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left))
-                && app.tab_dialog.is_none() =>
+            if matches!(mouse.kind, MouseEventKind::Down(MouseButton::Right))
+                && !app.dialog_open() =>
         {
-            app.tab_input_at(mouse.column, mouse.row)
+            app.tab_id_at(mouse.column, mouse.row)
+                .map(|id| Input::OpenTabMenu {
+                    id,
+                    column: mouse.column,
+                    row: mouse.row,
+                })
+        }
+        Event::Mouse(mouse)
+            if matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left))
+                && !app.dialog_open() =>
+        {
+            if app.tab_menu.is_some() {
+                app.tab_menu_input_at(mouse.column, mouse.row)
+                    .or(Some(Input::DismissTabMenu))
+            } else {
+                app.tab_input_at(mouse.column, mouse.row)
+                    .or_else(|| app.content_input_at(mouse.column, mouse.row))
+            }
         }
         _ => None,
     };
@@ -252,6 +278,19 @@ fn handle_event(
         }
     }
     Ok(false)
+}
+
+fn map_tab_menu_key(key: KeyEvent) -> Option<Input> {
+    match (key.code, key.modifiers) {
+        (KeyCode::Char('c'), modifiers) if modifiers.contains(KeyModifiers::CONTROL) => {
+            Some(Input::Quit)
+        }
+        (KeyCode::Enter, _) => Some(Input::Enter),
+        (KeyCode::Esc, _) => Some(Input::Esc),
+        (KeyCode::Up, _) | (KeyCode::Char('k'), KeyModifiers::NONE) => Some(Input::Up),
+        (KeyCode::Down, _) | (KeyCode::Char('j'), KeyModifiers::NONE) => Some(Input::Down),
+        _ => None,
+    }
 }
 
 fn map_key(key: KeyEvent, focus: Pane, dialog_open: bool) -> Option<Input> {
@@ -571,6 +610,96 @@ mod tests {
     }
 
     #[test]
+    fn left_click_focuses_prompt_and_composer() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let queue_path = dir.path().join("queue.json");
+        let mut workspace = qcli_core::Workspace::new();
+        let tab = workspace.first_tab_id();
+        workspace
+            .add_prompt(tab, qcli_core::Prompt::new("prompt").unwrap())
+            .unwrap();
+        let mut app = App::new(workspace);
+        let mut clipboard = qcli_platform::clipboard::FakeClipboard::new();
+        let prompt_area = ratatui::layout::Rect::new(0, 3, 20, 1);
+        let composer_area = ratatui::layout::Rect::new(0, 10, 20, 1);
+        app.prompt_hits = vec![crate::app::PromptHit {
+            area: prompt_area,
+            index: 0,
+        }];
+        app.composer_area = Some(composer_area);
+        app.focus = Pane::Composer;
+
+        let click_prompt = Event::Mouse(crossterm::event::MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: prompt_area.x,
+            row: prompt_area.y,
+            modifiers: KeyModifiers::NONE,
+        });
+        handle_event(click_prompt, &mut app, &mut clipboard, &queue_path).unwrap();
+        assert_eq!(app.focus, Pane::Queue);
+        assert_eq!(app.selected, Some(0));
+
+        let click_composer = Event::Mouse(crossterm::event::MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: composer_area.x,
+            row: composer_area.y,
+            modifiers: KeyModifiers::NONE,
+        });
+        handle_event(click_composer, &mut app, &mut clipboard, &queue_path).unwrap();
+        assert_eq!(app.focus, Pane::Composer);
+    }
+
+    #[test]
+    fn right_click_tab_and_click_rename_opens_dialog() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let queue_path = dir.path().join("queue.json");
+        let mut workspace = qcli_core::Workspace::new();
+        let target = workspace.create_tab("work").unwrap();
+        let mut app = App::new(workspace);
+        let mut clipboard = qcli_platform::clipboard::FakeClipboard::new();
+        let tab_area = ratatui::layout::Rect::new(2, 1, 6, 1);
+        app.tab_hits = vec![crate::app::TabHit {
+            area: tab_area,
+            target: crate::app::TabHitTarget::Tab(target),
+        }];
+        let right_click = Event::Mouse(crossterm::event::MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Right),
+            column: tab_area.x,
+            row: tab_area.y,
+            modifiers: KeyModifiers::NONE,
+        });
+
+        assert!(!handle_event(right_click, &mut app, &mut clipboard, &queue_path).unwrap());
+        assert_eq!(app.tab_menu.as_ref().unwrap().tab_id, target);
+
+        let rename_area = ratatui::layout::Rect::new(2, 2, 10, 1);
+        app.tab_menu_hits = vec![crate::app::TabMenuHit {
+            area: rename_area,
+            action: crate::app::TabMenuAction::Rename,
+        }];
+        let left_click = Event::Mouse(crossterm::event::MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: rename_area.x,
+            row: rename_area.y,
+            modifiers: KeyModifiers::NONE,
+        });
+
+        assert!(!handle_event(left_click, &mut app, &mut clipboard, &queue_path).unwrap());
+        assert!(matches!(
+            app.tab_dialog.as_ref().map(|dialog| dialog.mode),
+            Some(crate::app::TabDialogMode::Rename(id)) if id == target
+        ));
+    }
+
+    #[test]
+    fn tab_menu_keys_select_and_activate_actions() {
+        assert_eq!(map_tab_menu_key(key(KeyCode::Up)), Some(Input::Up));
+        assert_eq!(map_tab_menu_key(key(KeyCode::Down)), Some(Input::Down));
+        assert_eq!(map_tab_menu_key(key(KeyCode::Enter)), Some(Input::Enter));
+        assert_eq!(map_tab_menu_key(key(KeyCode::Esc)), Some(Input::Esc));
+    }
+
+    #[test]
     fn tab_shortcuts_map_in_queue_pane() {
         assert_eq!(
             map_key(key(KeyCode::Char('[')), Pane::Queue),
@@ -696,6 +825,22 @@ mod tests {
         assert_eq!(texts.len(), 2);
         assert!(texts.contains(&"from-a"));
         assert!(texts.contains(&"from-b"));
+    }
+
+    #[test]
+    fn close_tab_mutation_is_persisted() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let queue_path = dir.path().join("queue.json");
+        let mut workspace = qcli_core::Workspace::new();
+        let closed = workspace.create_tab("closed").unwrap();
+        qcli_core::storage::save(&queue_path, &workspace).unwrap();
+
+        let outcome = commit_mutation(&queue_path, &QueueMutation::CloseTab(closed)).unwrap();
+
+        assert!(matches!(outcome, MutationOutcome::Committed(_)));
+        let persisted = qcli_core::storage::load(&queue_path).unwrap();
+        assert!(persisted.tab(closed).is_none());
+        assert_eq!(persisted.tabs().len(), 1);
     }
 
     #[test]

@@ -173,6 +173,21 @@ impl Workspace {
         Ok(())
     }
 
+    pub fn close_tab(&mut self, id: TabId) -> Result<()> {
+        let index = self
+            .tabs
+            .iter()
+            .position(|tab| tab.id == id)
+            .ok_or_else(|| CoreError::TabNotFound(id.0.to_string()))?;
+        if self.tabs.len() == 1 {
+            return Err(CoreError::InvalidTab(
+                "cannot close the last tab".to_string(),
+            ));
+        }
+        self.tabs.remove(index);
+        Ok(())
+    }
+
     pub fn add_prompt(&mut self, tab_id: TabId, prompt: Prompt) -> Result<PromptId> {
         let prompt_id = prompt.id;
         let activity_at = prompt.created_at;
@@ -369,6 +384,33 @@ mod tests {
         workspace.add_prompt(first, prompt).unwrap();
 
         assert_eq!(workspace.first_tab_id(), first);
+    }
+
+    #[test]
+    fn close_tab_removes_it_and_its_prompts() {
+        let mut workspace = Workspace::new();
+        let closed = workspace.create_tab("closed").unwrap();
+        let kept = workspace.resolve_tab("1").unwrap();
+        let prompt = Prompt::new("discarded").unwrap();
+        let prompt_id = prompt.id;
+        workspace.add_prompt(closed, prompt).unwrap();
+
+        workspace.close_tab(closed).unwrap();
+
+        assert_eq!(workspace.tabs().len(), 1);
+        assert_eq!(workspace.first_tab_id(), kept);
+        assert!(workspace.get_prompt(prompt_id).is_none());
+    }
+
+    #[test]
+    fn last_tab_cannot_be_closed() {
+        let mut workspace = Workspace::new();
+        let only = workspace.first_tab_id();
+
+        let error = workspace.close_tab(only).unwrap_err();
+
+        assert_eq!(error.to_string(), "invalid tab: cannot close the last tab");
+        assert_eq!(workspace.tabs().len(), 1);
     }
 
     #[test]
