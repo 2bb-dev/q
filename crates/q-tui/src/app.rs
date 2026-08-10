@@ -37,6 +37,8 @@ pub enum Input {
     Tab,
     Up,
     Down,
+    PageUp,
+    PageDown,
     PreviousTab,
     NextTab,
     SelectTab(TabId),
@@ -105,6 +107,12 @@ pub struct TabContextMenu {
     pub column: u16,
     pub row: u16,
     pub selected: TabMenuAction,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PromptPreview {
+    pub id: PromptId,
+    pub scroll: u16,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -297,11 +305,14 @@ pub struct App {
     pub tab_dialog: Option<TabDialog>,
     pub tab_menu: Option<TabContextMenu>,
     pub close_tab_dialog: Option<CloseTabDialog>,
+    pub preview: Option<PromptPreview>,
     pub status: String,
     pub(crate) tab_hits: Vec<TabHit>,
     pub(crate) tab_menu_hits: Vec<TabMenuHit>,
     pub(crate) prompt_hits: Vec<PromptHit>,
     pub(crate) composer_area: Option<Rect>,
+    pub(crate) preview_page: u16,
+    pub(crate) preview_max_scroll: u16,
 }
 
 impl App {
@@ -321,11 +332,14 @@ impl App {
             tab_dialog: None,
             tab_menu: None,
             close_tab_dialog: None,
+            preview: None,
             status: String::new(),
             tab_hits: Vec::new(),
             tab_menu_hits: Vec::new(),
             prompt_hits: Vec::new(),
             composer_area: None,
+            preview_page: 1,
+            preview_max_scroll: 0,
         }
     }
 
@@ -383,6 +397,13 @@ impl App {
             .is_some_and(|dialog| self.workspace.tab(dialog.tab_id).is_none())
         {
             self.close_tab_dialog = None;
+        }
+        if self
+            .preview
+            .as_ref()
+            .is_some_and(|preview| self.workspace.get_prompt(preview.id).is_none())
+        {
+            self.preview = None;
         }
 
         self.selected = selected_id
@@ -484,6 +505,21 @@ mod tests {
         app.select_tab(empty);
         assert_eq!(app.focus, Pane::Composer);
         assert_eq!(app.selected, None);
+    }
+
+    #[test]
+    fn replace_workspace_closes_preview_of_removed_prompt() {
+        let mut workspace = Workspace::new();
+        let tab = workspace.first_tab_id();
+        let prompt = Prompt::new("preview me").unwrap();
+        let id = prompt.id;
+        workspace.add_prompt(tab, prompt).unwrap();
+        let mut app = App::new(workspace);
+        app.preview = Some(PromptPreview { id, scroll: 3 });
+
+        app.replace_workspace(Workspace::new());
+
+        assert_eq!(app.preview, None);
     }
 
     #[test]

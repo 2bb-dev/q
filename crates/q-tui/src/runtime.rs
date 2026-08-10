@@ -213,6 +213,12 @@ fn handle_event(
         {
             map_tab_menu_key(key)
         }
+        Event::Key(key)
+            if matches!(key.kind, KeyEventKind::Press | KeyEventKind::Repeat)
+                && app.preview.is_some() =>
+        {
+            map_preview_key(key)
+        }
         Event::Key(key) if matches!(key.kind, KeyEventKind::Press | KeyEventKind::Repeat) => {
             map_key(key, app.focus, app.dialog_open())
         }
@@ -223,7 +229,8 @@ fn handle_event(
         }
         Event::Mouse(mouse)
             if matches!(mouse.kind, MouseEventKind::Down(MouseButton::Right))
-                && !app.dialog_open() =>
+                && !app.dialog_open()
+                && app.preview.is_none() =>
         {
             app.tab_id_at(mouse.column, mouse.row)
                 .map(|id| Input::OpenTabMenu {
@@ -234,7 +241,8 @@ fn handle_event(
         }
         Event::Mouse(mouse)
             if matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left))
-                && !app.dialog_open() =>
+                && !app.dialog_open()
+                && app.preview.is_none() =>
         {
             if app.tab_menu.is_some() {
                 app.tab_menu_input_at(mouse.column, mouse.row)
@@ -293,6 +301,22 @@ fn map_tab_menu_key(key: KeyEvent) -> Option<Input> {
     }
 }
 
+fn map_preview_key(key: KeyEvent) -> Option<Input> {
+    match (key.code, key.modifiers) {
+        (KeyCode::Char('c'), modifiers) if modifiers.contains(KeyModifiers::CONTROL) => {
+            Some(Input::Quit)
+        }
+        (KeyCode::Enter, _) => Some(Input::Enter),
+        (KeyCode::Esc, _) => Some(Input::Esc),
+        (KeyCode::Up, _) => Some(Input::Up),
+        (KeyCode::Down, _) => Some(Input::Down),
+        (KeyCode::PageUp, _) => Some(Input::PageUp),
+        (KeyCode::PageDown, _) => Some(Input::PageDown),
+        (KeyCode::Char(c), KeyModifiers::NONE | KeyModifiers::SHIFT) => Some(Input::Char(c)),
+        _ => None,
+    }
+}
+
 fn map_key(key: KeyEvent, focus: Pane, dialog_open: bool) -> Option<Input> {
     let modifiers = key.modifiers;
     let shift = modifiers.contains(KeyModifiers::SHIFT);
@@ -334,6 +358,7 @@ fn map_key(key: KeyEvent, focus: Pane, dialog_open: bool) -> Option<Input> {
             (KeyCode::Char('k'), KeyModifiers::NONE) => Some(Input::Up),
             (KeyCode::Char('p'), KeyModifiers::NONE) => Some(Input::Char('p')),
             (KeyCode::Char('e'), KeyModifiers::NONE) => Some(Input::Char('e')),
+            (KeyCode::Char('f'), KeyModifiers::NONE) => Some(Input::Char('f')),
             (KeyCode::Char('['), KeyModifiers::NONE) => Some(Input::PreviousTab),
             (KeyCode::Char(']'), KeyModifiers::NONE) => Some(Input::NextTab),
             (KeyCode::Char('r'), KeyModifiers::NONE) => Some(Input::OpenRenameTab),
@@ -736,6 +761,68 @@ mod tests {
             map_key(key(KeyCode::Char('e')), Pane::Queue),
             Some(Input::Char('e'))
         );
+        assert_eq!(
+            map_key(key(KeyCode::Char('f')), Pane::Queue),
+            Some(Input::Char('f'))
+        );
+        assert_eq!(
+            map_key(key(KeyCode::Char('f')), Pane::Composer),
+            Some(Input::Char('f'))
+        );
+    }
+
+    #[test]
+    fn preview_keys_map_to_scrolling_and_closing() {
+        assert_eq!(map_preview_key(key(KeyCode::Up)), Some(Input::Up));
+        assert_eq!(map_preview_key(key(KeyCode::Down)), Some(Input::Down));
+        assert_eq!(map_preview_key(key(KeyCode::PageUp)), Some(Input::PageUp));
+        assert_eq!(
+            map_preview_key(key(KeyCode::PageDown)),
+            Some(Input::PageDown)
+        );
+        assert_eq!(
+            map_preview_key(with_mods(KeyCode::Char('G'), KeyModifiers::SHIFT)),
+            Some(Input::Char('G'))
+        );
+        assert_eq!(
+            map_preview_key(key(KeyCode::Char('f'))),
+            Some(Input::Char('f'))
+        );
+        assert_eq!(map_preview_key(key(KeyCode::Esc)), Some(Input::Esc));
+        assert_eq!(
+            map_preview_key(with_mods(KeyCode::Char('c'), KeyModifiers::CONTROL)),
+            Some(Input::Quit)
+        );
+    }
+
+    #[test]
+    fn clicks_are_ignored_while_the_preview_is_open() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let queue_path = dir.path().join("queue.json");
+        let mut workspace = q_core::Workspace::new();
+        let tab = workspace.first_tab_id();
+        workspace
+            .add_prompt(tab, q_core::Prompt::new("prompt").unwrap())
+            .unwrap();
+        let mut app = App::new(workspace);
+        let mut clipboard = q_platform::clipboard::FakeClipboard::new();
+        let composer_area = ratatui::layout::Rect::new(0, 10, 20, 1);
+        app.composer_area = Some(composer_area);
+        app.preview = Some(crate::app::PromptPreview {
+            id: app.visible_prompts()[0].id,
+            scroll: 0,
+        });
+
+        let click = Event::Mouse(crossterm::event::MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: composer_area.x,
+            row: composer_area.y,
+            modifiers: KeyModifiers::NONE,
+        });
+        handle_event(click, &mut app, &mut clipboard, &queue_path).unwrap();
+
+        assert_eq!(app.focus, Pane::Queue);
+        assert!(app.preview.is_some());
     }
 
     #[test]

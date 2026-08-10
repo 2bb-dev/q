@@ -33,6 +33,16 @@ pub fn draw(frame: &mut Frame, app: &mut App, cursor_on: bool) {
     render_queue(frame, app, outer[3]);
     render_composer(frame, app, cursor_on, outer[5]);
     render_footer(frame, app, outer[7]);
+    render_preview(
+        frame,
+        app,
+        Rect::new(
+            area.x,
+            outer[2].y,
+            area.width,
+            outer[6].bottom().saturating_sub(outer[2].y),
+        ),
+    );
     render_tab_menu(frame, app);
     render_tab_dialog(frame, app, cursor_on);
     render_close_tab_dialog(frame, app);
@@ -236,11 +246,77 @@ fn render_composer(frame: &mut Frame, app: &mut App, cursor_on: bool, area: Rect
 
 fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
     let hints = if app.status.is_empty() {
-        "p pin  ·  e edit  ·  tab switch"
+        "p pin  ·  e edit  ·  f open  ·  tab switch"
     } else {
         app.status.as_str()
     };
     frame.render_widget(Paragraph::new(Line::styled(hints, dim())), area);
+}
+
+fn render_preview(frame: &mut Frame, app: &mut App, preview_area: Rect) {
+    let Some((text, scroll)) = app.preview.as_ref().and_then(|preview| {
+        app.workspace
+            .get_prompt(preview.id)
+            .map(|prompt| (prompt.text.clone(), preview.scroll))
+    }) else {
+        return;
+    };
+    if preview_area.width < 8 || preview_area.height < 3 {
+        return;
+    }
+    let block = Block::default()
+        .title(" Prompt ")
+        .title_bottom(Line::styled(" ↑↓ scroll · Enter copy · Esc close ", dim()))
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(ACCENT));
+    let inner = block.inner(preview_area);
+    frame.render_widget(Clear, preview_area);
+    frame.render_widget(block, preview_area);
+
+    let lines = wrap_lines(&text, inner.width as usize);
+    let total = u16::try_from(lines.len()).unwrap_or(u16::MAX);
+    app.preview_page = inner.height.max(1);
+    app.preview_max_scroll = total.saturating_sub(inner.height);
+    let scroll = scroll.min(app.preview_max_scroll);
+    if let Some(preview) = app.preview.as_mut() {
+        preview.scroll = scroll;
+    }
+
+    frame.render_widget(
+        Paragraph::new(lines.into_iter().map(Line::raw).collect::<Vec<_>>()).scroll((scroll, 0)),
+        inner,
+    );
+}
+
+fn wrap_lines(text: &str, width: usize) -> Vec<String> {
+    let width = width.max(1);
+    let mut wrapped = Vec::new();
+    for line in text.split('\n') {
+        let mut current = String::new();
+        let mut current_width = 0;
+        for segment in line.split_inclusive(' ') {
+            let word_width = segment.trim_end_matches(' ').chars().count();
+            if current_width > 0 && current_width + word_width > width {
+                wrapped.push(std::mem::take(&mut current));
+                current_width = 0;
+            }
+            if word_width > width {
+                for c in segment.chars() {
+                    if current_width == width {
+                        wrapped.push(std::mem::take(&mut current));
+                        current_width = 0;
+                    }
+                    current.push(c);
+                    current_width += 1;
+                }
+                continue;
+            }
+            current.push_str(segment);
+            current_width += segment.chars().count();
+        }
+        wrapped.push(current);
+    }
+    wrapped
 }
 
 fn render_tab_menu(frame: &mut Frame, app: &mut App) {
@@ -518,6 +594,51 @@ mod tests {
             app.content_input_at(area.x, area.bottom() - 1),
             Some(crate::app::Input::SelectPrompt(0))
         );
+    }
+
+    #[test]
+    fn preview_renders_full_prompt_and_scrolls_to_the_end() {
+        let mut workspace = Workspace::new();
+        let tab = workspace.first_tab_id();
+        let text = (0..40)
+            .map(|index| format!("line-{index}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        workspace
+            .add_prompt(tab, Prompt::new(text).unwrap())
+            .unwrap();
+        let mut app = App::new(workspace);
+        let id = app.visible_prompts()[0].id;
+        app.preview = Some(crate::app::PromptPreview { id, scroll: 0 });
+
+        let top = render(&mut app, false, 60);
+        assert!(top.contains("Prompt"));
+        assert!(top.contains("Esc close"));
+        assert!(top.contains("line-0"));
+        assert!(!top.contains("line-39"));
+        assert!(app.preview_max_scroll > 0);
+
+        app.preview.as_mut().unwrap().scroll = u16::MAX;
+        let bottom = render(&mut app, false, 60);
+        assert!(bottom.contains("line-39"));
+        assert_eq!(app.preview.unwrap().scroll, app.preview_max_scroll);
+    }
+
+    #[test]
+    fn preview_wraps_long_lines_and_preserves_indentation() {
+        assert_eq!(
+            wrap_lines("alpha beta gamma", 11),
+            vec!["alpha beta ".to_string(), "gamma".to_string()]
+        );
+        assert_eq!(
+            wrap_lines("supercalifragilistic", 10),
+            vec!["supercalif".to_string(), "ragilistic".to_string()]
+        );
+        assert_eq!(
+            wrap_lines("    indented", 20),
+            vec!["    indented".to_string()]
+        );
+        assert_eq!(wrap_lines("a\n\nb", 5), vec!["a", "", "b"]);
     }
 
     #[test]

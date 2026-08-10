@@ -4,6 +4,9 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+- Added a scrollable full-text preview for the selected prompt, opened with `f` in the queue pane (`↑↓`/`j`/`k`, `PgUp`/`PgDn`, `g`/`G` scroll, `Enter` copies, `Esc` closes)
+
 ## [0.1.0] - 2026-08-10
 
 ### Changed

@@ -1,6 +1,6 @@
 use crate::app::{
-    App, CloseTabDialog, Effect, Input, Pane, QueueMutation, TabContextMenu, TabDialog,
-    TabDialogMode, TabMenuAction,
+    App, CloseTabDialog, Effect, Input, Pane, PromptPreview, QueueMutation, TabContextMenu,
+    TabDialog, TabDialogMode, TabMenuAction,
 };
 use chrono::Utc;
 use q_core::{Prompt, TabId};
@@ -29,6 +29,9 @@ pub fn reduce(app: &mut App, input: Input) -> Option<Effect> {
     }
     if app.tab_menu.is_some() {
         return reduce_tab_menu(app, input);
+    }
+    if app.preview.is_some() {
+        return reduce_preview(app, input);
     }
 
     match input {
@@ -72,6 +75,37 @@ pub fn reduce(app: &mut App, input: Input) -> Option<Effect> {
     match app.focus {
         Pane::Queue => reduce_queue(app, input),
         Pane::Composer => reduce_composer(app, input),
+    }
+}
+
+fn reduce_preview(app: &mut App, input: Input) -> Option<Effect> {
+    let page = app.preview_page;
+    let max_scroll = app.preview_max_scroll;
+    match input {
+        Input::Esc | Input::Char('f') | Input::Char('q') => app.preview = None,
+        Input::Enter => {
+            let preview = app.preview.take()?;
+            let prompt = app.workspace.get_prompt(preview.id)?;
+            return Some(Effect::CopyToClipboard(prompt.text.clone()));
+        }
+        Input::Up | Input::Char('k') => scroll_preview(app, |scroll| scroll.saturating_sub(1)),
+        Input::Down | Input::Char('j') => {
+            scroll_preview(app, |scroll| scroll.saturating_add(1).min(max_scroll))
+        }
+        Input::PageUp => scroll_preview(app, |scroll| scroll.saturating_sub(page)),
+        Input::PageDown => {
+            scroll_preview(app, |scroll| scroll.saturating_add(page).min(max_scroll))
+        }
+        Input::Char('g') => scroll_preview(app, |_| 0),
+        Input::Char('G') => scroll_preview(app, |_| max_scroll),
+        _ => {}
+    }
+    None
+}
+
+fn scroll_preview(app: &mut App, f: impl FnOnce(u16) -> u16) {
+    if let Some(preview) = app.preview.as_mut() {
+        preview.scroll = f(preview.scroll);
     }
 }
 
@@ -244,6 +278,14 @@ fn reduce_queue(app: &mut App, input: Input) -> Option<Effect> {
                 id: prompt.id,
                 pinned: !prompt.pinned,
             }))
+        }
+        Input::Char('f') => {
+            let prompt = app.selected_prompt()?;
+            app.preview = Some(PromptPreview {
+                id: prompt.id,
+                scroll: 0,
+            });
+            None
         }
         Input::Char('e') => {
             let prompt = app.selected_prompt()?.clone();
@@ -452,6 +494,72 @@ mod tests {
         ));
         assert_eq!(app.composer.text(), text);
         assert_eq!(app.focus, Pane::Composer);
+    }
+
+    #[test]
+    fn f_opens_preview_for_selected_prompt_and_closes_again() {
+        let mut app = app_with(1);
+        let id = app.selected_prompt().unwrap().id;
+
+        assert_eq!(reduce(&mut app, Input::Char('f')), None);
+        assert_eq!(app.preview.map(|preview| preview.id), Some(id));
+
+        assert_eq!(reduce(&mut app, Input::Char('f')), None);
+        assert!(app.preview.is_none());
+
+        reduce(&mut app, Input::Char('f'));
+        reduce(&mut app, Input::Esc);
+        assert!(app.preview.is_none());
+    }
+
+    #[test]
+    fn preview_scrolling_is_clamped_to_rendered_metrics() {
+        let mut app = app_with(1);
+        reduce(&mut app, Input::Char('f'));
+        app.preview_page = 4;
+        app.preview_max_scroll = 10;
+
+        reduce(&mut app, Input::Up);
+        assert_eq!(app.preview.unwrap().scroll, 0);
+
+        reduce(&mut app, Input::PageDown);
+        assert_eq!(app.preview.unwrap().scroll, 4);
+
+        reduce(&mut app, Input::Char('G'));
+        assert_eq!(app.preview.unwrap().scroll, 10);
+
+        reduce(&mut app, Input::Char('j'));
+        assert_eq!(app.preview.unwrap().scroll, 10);
+
+        reduce(&mut app, Input::Char('g'));
+        assert_eq!(app.preview.unwrap().scroll, 0);
+    }
+
+    #[test]
+    fn preview_enter_copies_prompt_without_removing_it() {
+        let mut app = app_with(1);
+        let text = app.selected_prompt().unwrap().text.clone();
+        reduce(&mut app, Input::Char('f'));
+
+        assert_eq!(
+            reduce(&mut app, Input::Enter),
+            Some(Effect::CopyToClipboard(text))
+        );
+        assert!(app.preview.is_none());
+        assert_eq!(app.visible_prompts().len(), 1);
+    }
+
+    #[test]
+    fn preview_swallows_queue_shortcuts() {
+        let mut app = app_with(2);
+        reduce(&mut app, Input::Char('f'));
+
+        assert_eq!(reduce(&mut app, Input::Char('p')), None);
+        assert_eq!(reduce(&mut app, Input::Char('e')), None);
+
+        assert!(!app.visible_prompts()[0].pinned);
+        assert_eq!(app.composer.text(), "");
+        assert_eq!(app.focus, Pane::Queue);
     }
 
     #[test]
