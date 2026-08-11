@@ -85,7 +85,19 @@ For multi-step tasks, state a brief plan:
 - **Error types**: `thiserror` for library crates, `anyhow` for the binary crate.
 - **No `unwrap()` or `expect()` outside tests.**
 - **I/O boundaries**: only `q-platform` and `q-core::storage` touch the filesystem or OS APIs. Domain code stays pure.
-- **Tests**: unit tests live next to the code (`mod tests`). Integration tests live in `crates/q-cli/tests/`.
+- **Tests**: no test code in implementation files. Unit tests live in `crates/<pkg>/tests/unit/`, mirroring the `src/` tree, and are attached to the module under test with a three-line declaration at the bottom of the source file:
+
+  ```rust
+  #[cfg(test)]
+  #[path = "../tests/unit/workspace.rs"]
+  mod tests;
+  ```
+
+  The `#[path]` is relative to the directory of the source file, so a nested module such as `src/commands/history.rs` uses `../../tests/unit/commands/history.rs`. This keeps unit tests able to reach private and `pub(crate)` items, so nothing needs to be made `pub` just for testing. Start each unit test file with `use super::*;`.
+
+  Never name a unit test file `main.rs`: Cargo treats `tests/<dir>/main.rs` as a separate integration-test target and compiles it outside the crate. Use a descriptive name such as `tests/unit/cli.rs` instead.
+
+  Black-box integration tests that drive the built binary stay as top-level files in `crates/q-cli/tests/` (for example `cli_add.rs`), where Cargo picks them up as their own targets.
 
 ---
 

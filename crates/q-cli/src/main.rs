@@ -32,6 +32,20 @@ enum Command {
         #[arg(long)]
         tab: Option<String>,
     },
+    /// Search every prompt ever added, including ones already copied away.
+    History {
+        /// Only show entries containing this text.
+        search: Option<String>,
+        /// Emit JSON instead of human-readable output.
+        #[arg(long)]
+        json: bool,
+        /// Forget the entire prompt history.
+        #[arg(long, conflicts_with_all = ["search", "forget"])]
+        clear: bool,
+        /// Forget every remembered prompt matching this text.
+        #[arg(long, conflicts_with = "search", value_name = "TEXT")]
+        forget: Option<String>,
+    },
     /// Copy a prompt to the clipboard.
     Copy {
         id: Option<String>,
@@ -67,6 +81,12 @@ fn main() -> Result<()> {
     match cli.command {
         Some(Command::Add { text, pin, tab }) => commands::add::run(text, pin, tab),
         Some(Command::List { json, tab }) => commands::list::run(json, tab),
+        Some(Command::History {
+            search,
+            json,
+            clear,
+            forget,
+        }) => commands::history::run(json, search, clear, forget),
         Some(Command::Copy {
             id,
             next,
@@ -86,18 +106,5 @@ fn main() -> Result<()> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn no_subcommand_selects_default_tui() {
-        let cli = Cli::try_parse_from(["q"]).unwrap();
-        assert!(cli.command.is_none());
-    }
-
-    #[test]
-    fn explicit_tui_remains_available() {
-        let cli = Cli::try_parse_from(["q", "tui"]).unwrap();
-        assert!(matches!(cli.command, Some(Command::Tui)));
-    }
-}
+#[path = "../tests/unit/cli.rs"]
+mod tests;

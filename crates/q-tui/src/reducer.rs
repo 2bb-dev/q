@@ -1,6 +1,6 @@
 use crate::app::{
-    App, CloseTabDialog, Effect, Input, Pane, PromptPreview, QueueMutation, TabContextMenu,
-    TabDialog, TabDialogMode, TabMenuAction,
+    App, CloseTabDialog, Effect, Input, Pane, PreviewSource, PromptPreview, QueueMutation,
+    SearchDialog, TabContextMenu, TabDialog, TabDialogMode, TabMenuAction,
 };
 use chrono::Utc;
 use q_core::{Prompt, TabId};
@@ -33,8 +33,15 @@ pub fn reduce(app: &mut App, input: Input) -> Option<Effect> {
     if app.preview.is_some() {
         return reduce_preview(app, input);
     }
+    if app.search.is_some() {
+        return reduce_search(app, input);
+    }
 
     match input {
+        Input::OpenSearch => {
+            app.search = Some(SearchDialog::default());
+            return None;
+        }
         Input::OpenCreateTab => {
             app.tab_dialog = Some(TabDialog::create());
             return None;
@@ -84,9 +91,10 @@ fn reduce_preview(app: &mut App, input: Input) -> Option<Effect> {
     match input {
         Input::Esc | Input::Char('f') | Input::Char('q') => app.preview = None,
         Input::Enter => {
-            let preview = app.preview.take()?;
-            let prompt = app.workspace.get_prompt(preview.id)?;
-            return Some(Effect::CopyToClipboard(prompt.text.clone()));
+            let text = app.preview_text()?;
+            app.preview = None;
+            app.search = None;
+            return Some(Effect::CopyToClipboard(text));
         }
         Input::Up | Input::Char('k') => scroll_preview(app, |scroll| scroll.saturating_sub(1)),
         Input::Down | Input::Char('j') => {
@@ -107,6 +115,68 @@ fn scroll_preview(app: &mut App, f: impl FnOnce(u16) -> u16) {
     if let Some(preview) = app.preview.as_mut() {
         preview.scroll = f(preview.scroll);
     }
+}
+
+fn reduce_search(app: &mut App, input: Input) -> Option<Effect> {
+    app.refresh_search_folds();
+    let len = app.search_results().len();
+    match input {
+        Input::Esc | Input::OpenSearch => app.search = None,
+        Input::Char(c) => {
+            let search = app.search.as_mut()?;
+            search.query.push(c);
+            search.selected = 0;
+        }
+        Input::Backspace => {
+            let search = app.search.as_mut()?;
+            search.query.pop();
+            search.selected = 0;
+        }
+        Input::Up => {
+            let search = app.search.as_mut()?;
+            search.selected = search.selected.saturating_sub(1);
+        }
+        Input::Down => {
+            let search = app.search.as_mut()?;
+            search.selected = (search.selected + 1).min(len.saturating_sub(1));
+        }
+        Input::Enter => open_history_preview(app, app.search.as_ref()?.selected),
+        Input::SelectHistory(index) => {
+            app.search.as_mut()?.selected = index;
+            open_history_preview(app, index);
+        }
+        Input::ForgetHistory => return forget_selected_history(app),
+        _ => {}
+    }
+    None
+}
+
+fn forget_selected_history(app: &mut App) -> Option<Effect> {
+    let selected = app.search.as_ref()?.selected;
+    let text = app.search_results().get(selected)?.text.clone();
+    if !app.workspace.forget_history(&text) {
+        return None;
+    }
+    app.search_folds.clear();
+    let remaining = app.search_results().len();
+    if let Some(search) = app.search.as_mut() {
+        search.selected = selected.min(remaining.saturating_sub(1));
+    }
+    Some(Effect::Persist(QueueMutation::ForgetHistory(text)))
+}
+
+fn open_history_preview(app: &mut App, index: usize) {
+    let Some(entry) = app
+        .search_results()
+        .get(index)
+        .map(|entry| entry.text.clone())
+    else {
+        return;
+    };
+    app.preview = Some(PromptPreview {
+        source: PreviewSource::History(entry),
+        scroll: 0,
+    });
 }
 
 fn reduce_tab_menu(app: &mut App, input: Input) -> Option<Effect> {
@@ -282,7 +352,7 @@ fn reduce_queue(app: &mut App, input: Input) -> Option<Effect> {
         Input::Char('f') => {
             let prompt = app.selected_prompt()?;
             app.preview = Some(PromptPreview {
-                id: prompt.id,
+                source: PreviewSource::Prompt(prompt.id),
                 scroll: 0,
             });
             None
@@ -358,335 +428,5 @@ fn reclamp_selection(app: &mut App) {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use q_core::Workspace;
-
-    fn app_with(n: usize) -> App {
-        let mut workspace = Workspace::new();
-        let tab = workspace.first_tab_id();
-        for index in 0..n {
-            workspace
-                .add_prompt(tab, Prompt::new(format!("prompt-{index}")).unwrap())
-                .unwrap();
-        }
-        App::new(workspace)
-    }
-
-    #[test]
-    fn mouse_inputs_focus_prompt_and_composer() {
-        let mut app = app_with(2);
-        app.focus = Pane::Composer;
-
-        reduce(&mut app, Input::SelectPrompt(1));
-        assert_eq!(app.focus, Pane::Queue);
-        assert_eq!(app.selected, Some(1));
-
-        reduce(&mut app, Input::FocusComposer);
-        assert_eq!(app.focus, Pane::Composer);
-        assert_eq!(app.selected, Some(1));
-    }
-
-    #[test]
-    fn tab_cycles_focus() {
-        let mut app = app_with(1);
-        reduce(&mut app, Input::Tab);
-        assert_eq!(app.focus, Pane::Composer);
-        reduce(&mut app, Input::Tab);
-        assert_eq!(app.focus, Pane::Queue);
-    }
-
-    #[test]
-    fn create_dialog_creates_and_selects_empty_tab() {
-        let mut app = app_with(1);
-        reduce(&mut app, Input::OpenCreateTab);
-        for c in "work".chars() {
-            reduce(&mut app, Input::Char(c));
-        }
-        let effect = reduce(&mut app, Input::Enter);
-        assert!(matches!(
-            effect,
-            Some(Effect::Persist(QueueMutation::CreateTab { name, .. })) if name == "work"
-        ));
-        assert_eq!(app.workspace.tab(app.active_tab_id).unwrap().name(), "work");
-        assert_eq!(app.focus, Pane::Composer);
-        assert!(app.visible_prompts().is_empty());
-    }
-
-    #[test]
-    fn duplicate_tab_name_keeps_dialog_open_with_error() {
-        let mut app = app_with(0);
-        app.workspace.create_tab("work").unwrap();
-        reduce(&mut app, Input::OpenCreateTab);
-        for c in "WORK".chars() {
-            reduce(&mut app, Input::Char(c));
-        }
-        assert_eq!(reduce(&mut app, Input::Enter), None);
-        assert!(app
-            .tab_dialog
-            .as_ref()
-            .unwrap()
-            .error
-            .contains("already exists"));
-    }
-
-    #[test]
-    fn next_and_previous_select_adjacent_tabs() {
-        let mut app = app_with(0);
-        let second = app.workspace.create_tab("second").unwrap();
-        let first = app.workspace.resolve_tab("1").unwrap();
-        app.select_tab(second);
-        reduce(&mut app, Input::NextTab);
-        assert_eq!(app.active_tab_id, first);
-        reduce(&mut app, Input::PreviousTab);
-        assert_eq!(app.active_tab_id, second);
-    }
-
-    #[test]
-    fn enter_on_unpinned_copies_and_pops() {
-        let mut app = app_with(2);
-        let prompt = app.selected_prompt().unwrap().clone();
-        let effect = reduce(&mut app, Input::Enter);
-        assert_eq!(
-            effect,
-            Some(Effect::CopyAndPersist {
-                text: prompt.text,
-                mutation: QueueMutation::Remove(prompt.id),
-            })
-        );
-        assert_eq!(app.visible_prompts().len(), 1);
-    }
-
-    #[test]
-    fn enter_on_pinned_copies_but_does_not_pop() {
-        let mut app = app_with(1);
-        let id = app.visible_prompts()[0].id;
-        app.workspace.set_prompt_pinned(id, true).unwrap();
-        let text = app.selected_prompt().unwrap().text.clone();
-        assert_eq!(
-            reduce(&mut app, Input::Enter),
-            Some(Effect::CopyToClipboard(text))
-        );
-        assert_eq!(app.visible_prompts().len(), 1);
-    }
-
-    #[test]
-    fn p_pins_selected_prompt() {
-        let mut app = app_with(1);
-        let id = app.selected_prompt().unwrap().id;
-        assert_eq!(
-            reduce(&mut app, Input::Char('p')),
-            Some(Effect::Persist(QueueMutation::SetPinned {
-                id,
-                pinned: true
-            }))
-        );
-        assert!(app.selected_prompt().unwrap().pinned);
-    }
-
-    #[test]
-    fn e_moves_selected_prompt_into_composer() {
-        let mut app = app_with(1);
-        let text = app.selected_prompt().unwrap().text.clone();
-        assert!(matches!(
-            reduce(&mut app, Input::Char('e')),
-            Some(Effect::Persist(QueueMutation::Remove(_)))
-        ));
-        assert_eq!(app.composer.text(), text);
-        assert_eq!(app.focus, Pane::Composer);
-    }
-
-    #[test]
-    fn f_opens_preview_for_selected_prompt_and_closes_again() {
-        let mut app = app_with(1);
-        let id = app.selected_prompt().unwrap().id;
-
-        assert_eq!(reduce(&mut app, Input::Char('f')), None);
-        assert_eq!(app.preview.map(|preview| preview.id), Some(id));
-
-        assert_eq!(reduce(&mut app, Input::Char('f')), None);
-        assert!(app.preview.is_none());
-
-        reduce(&mut app, Input::Char('f'));
-        reduce(&mut app, Input::Esc);
-        assert!(app.preview.is_none());
-    }
-
-    #[test]
-    fn preview_scrolling_is_clamped_to_rendered_metrics() {
-        let mut app = app_with(1);
-        reduce(&mut app, Input::Char('f'));
-        app.preview_page = 4;
-        app.preview_max_scroll = 10;
-
-        reduce(&mut app, Input::Up);
-        assert_eq!(app.preview.unwrap().scroll, 0);
-
-        reduce(&mut app, Input::PageDown);
-        assert_eq!(app.preview.unwrap().scroll, 4);
-
-        reduce(&mut app, Input::Char('G'));
-        assert_eq!(app.preview.unwrap().scroll, 10);
-
-        reduce(&mut app, Input::Char('j'));
-        assert_eq!(app.preview.unwrap().scroll, 10);
-
-        reduce(&mut app, Input::Char('g'));
-        assert_eq!(app.preview.unwrap().scroll, 0);
-    }
-
-    #[test]
-    fn preview_enter_copies_prompt_without_removing_it() {
-        let mut app = app_with(1);
-        let text = app.selected_prompt().unwrap().text.clone();
-        reduce(&mut app, Input::Char('f'));
-
-        assert_eq!(
-            reduce(&mut app, Input::Enter),
-            Some(Effect::CopyToClipboard(text))
-        );
-        assert!(app.preview.is_none());
-        assert_eq!(app.visible_prompts().len(), 1);
-    }
-
-    #[test]
-    fn preview_swallows_queue_shortcuts() {
-        let mut app = app_with(2);
-        reduce(&mut app, Input::Char('f'));
-
-        assert_eq!(reduce(&mut app, Input::Char('p')), None);
-        assert_eq!(reduce(&mut app, Input::Char('e')), None);
-
-        assert!(!app.visible_prompts()[0].pinned);
-        assert_eq!(app.composer.text(), "");
-        assert_eq!(app.focus, Pane::Queue);
-    }
-
-    #[test]
-    fn rename_dialog_renames_active_tab_without_reordering() {
-        let mut app = app_with(0);
-        let id = app.active_tab_id;
-        app.focus = Pane::Queue;
-        reduce(&mut app, Input::OpenRenameTab);
-        reduce(&mut app, Input::Char('w'));
-        for c in "ork".chars() {
-            reduce(&mut app, Input::Char(c));
-        }
-        assert_eq!(
-            reduce(&mut app, Input::Enter),
-            Some(Effect::Persist(QueueMutation::RenameTab {
-                id,
-                name: "work".to_string(),
-            }))
-        );
-        assert_eq!(app.workspace.tab(id).unwrap().name(), "work");
-        assert_eq!(app.workspace.first_tab_id(), id);
-    }
-
-    #[test]
-    fn tab_menu_rename_opens_rename_dialog_for_target_tab() {
-        let mut app = app_with(0);
-        let target = app.workspace.create_tab("work").unwrap();
-        reduce(
-            &mut app,
-            Input::OpenTabMenu {
-                id: target,
-                column: 4,
-                row: 1,
-            },
-        );
-
-        reduce(&mut app, Input::SelectTabMenuAction(TabMenuAction::Rename));
-
-        let dialog = app.tab_dialog.as_ref().unwrap();
-        assert_eq!(dialog.mode, TabDialogMode::Rename(target));
-        assert_eq!(dialog.value, "work");
-        assert!(app.tab_menu.is_none());
-    }
-
-    #[test]
-    fn closing_active_tab_requires_confirmation_and_selects_neighbor() {
-        let mut app = app_with(0);
-        let remaining = app.active_tab_id;
-        let closed = app.workspace.create_tab("closed").unwrap();
-        app.select_tab(closed);
-        reduce(
-            &mut app,
-            Input::OpenTabMenu {
-                id: closed,
-                column: 4,
-                row: 1,
-            },
-        );
-        reduce(&mut app, Input::SelectTabMenuAction(TabMenuAction::Close));
-
-        assert!(app.workspace.tab(closed).is_some());
-        assert_eq!(app.close_tab_dialog.as_ref().unwrap().tab_id, closed);
-
-        assert_eq!(
-            reduce(&mut app, Input::Enter),
-            Some(Effect::Persist(QueueMutation::CloseTab(closed)))
-        );
-        assert!(app.workspace.tab(closed).is_none());
-        assert_eq!(app.active_tab_id, remaining);
-    }
-
-    #[test]
-    fn escape_cancels_tab_close() {
-        let mut app = app_with(0);
-        let closed = app.workspace.create_tab("closed").unwrap();
-        app.close_tab_dialog = Some(CloseTabDialog {
-            tab_id: closed,
-            tab_name: "closed".to_string(),
-        });
-
-        assert_eq!(reduce(&mut app, Input::Esc), None);
-
-        assert!(app.close_tab_dialog.is_none());
-        assert!(app.workspace.tab(closed).is_some());
-    }
-
-    #[test]
-    fn tab_menu_does_not_offer_confirmation_for_last_tab() {
-        let mut app = app_with(0);
-        let only = app.active_tab_id;
-        reduce(
-            &mut app,
-            Input::OpenTabMenu {
-                id: only,
-                column: 4,
-                row: 1,
-            },
-        );
-
-        reduce(&mut app, Input::SelectTabMenuAction(TabMenuAction::Close));
-
-        assert!(app.close_tab_dialog.is_none());
-        assert_eq!(app.status, "cannot close the last tab");
-    }
-
-    #[test]
-    fn composer_enter_saves_prompt_in_active_tab() {
-        let mut app = app_with(0);
-        app.focus = Pane::Composer;
-        app.composer.set_text("hi");
-        let tab_id = app.active_tab_id;
-        let effect = reduce(&mut app, Input::Enter);
-        assert!(matches!(
-            effect,
-            Some(Effect::Persist(QueueMutation::Add { tab_id: id, prompt }))
-                if id == tab_id && prompt.text == "hi"
-        ));
-        assert_eq!(app.visible_prompts().len(), 1);
-    }
-
-    #[test]
-    fn composer_paste_is_inserted_as_one_multiline_edit() {
-        let mut app = app_with(0);
-        app.focus = Pane::Composer;
-        reduce(&mut app, Input::Paste("first\rsecond".to_string()));
-        assert_eq!(app.composer.text(), "first\nsecond");
-        reduce(&mut app, Input::Undo);
-        assert_eq!(app.composer.text(), "");
-    }
-}
+#[path = "../tests/unit/reducer.rs"]
+mod tests;

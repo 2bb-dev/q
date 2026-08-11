@@ -17,6 +17,9 @@
 - **Workspace tabs** -- Organize prompts into named project queues and switch between them with the mouse or keyboard.
 - **Pop-on-Copy** -- Copy the newest prompt to your clipboard and remove it from its queue in one step.
 - **Pinning** -- Keep frequently used prompts at the top. Pinned prompts copy without popping.
+- **Prompt history** -- Every prompt you add is remembered, even after it is popped or its tab is closed. Search it with `Cmd+/` (or `/` in the queue pane) and from the CLI with `q history`. Forget entries you would rather not keep with `^d` in the search overlay, `q history --forget <text>`, or `q history --clear`.
+- **Search in any language** -- Queries are transliterated to ASCII, so `uluchshit` finds `улучшить`, `cafe` finds `café`, and case, accents, and Unicode composition forms are all ignored.
+- **Native mouse** -- Every TUI surface is clickable: tabs, prompts, the composer, right-click tab menus, and history search results, with wheel scrolling throughout.
 - **Pipe-friendly** -- Read from stdin, write to stdout, and emit JSON.
 - **Cross-platform** -- macOS, Linux, and Windows.
 - **Local-first** -- Queue data stays in a local JSON file.
@@ -45,7 +48,7 @@ Verify the installation with `q --version`.
 QCLI_APP_DIR="$HOME/.q" q
 ```
 
-Back up `queue.json` to preserve all tabs and prompts. Closing a tab permanently deletes the prompts in that tab.
+Back up `queue.json` to preserve all tabs and prompts. Closing a tab permanently deletes the prompts in that tab, but their text stays searchable in the prompt history, which keeps the 500 most recent prompts within a 256 KiB budget. Because history outlives the queue, popping a prompt or closing a tab no longer erases its text -- use `q history --forget <text>` or `q history --clear` for that.
 
 ## Contributing
 

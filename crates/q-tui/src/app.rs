@@ -1,5 +1,5 @@
 use chrono::{DateTime, Utc};
-use q_core::{Prompt, PromptId, TabId, Workspace};
+use q_core::{HistoryEntry, Prompt, PromptId, TabId, Workspace};
 use ratatui::{
     layout::Rect,
     style::{Modifier, Style},
@@ -43,6 +43,9 @@ pub enum Input {
     NextTab,
     SelectTab(TabId),
     SelectPrompt(usize),
+    SelectHistory(usize),
+    OpenSearch,
+    ForgetHistory,
     FocusComposer,
     OpenCreateTab,
     OpenRenameTab,
@@ -75,6 +78,7 @@ pub enum QueueMutation {
         name: String,
     },
     CloseTab(TabId),
+    ForgetHistory(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -109,10 +113,22 @@ pub struct TabContextMenu {
     pub selected: TabMenuAction,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PreviewSource {
+    Prompt(PromptId),
+    History(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PromptPreview {
-    pub id: PromptId,
+    pub source: PreviewSource,
     pub scroll: u16,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct SearchDialog {
+    pub query: String,
+    pub selected: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -183,7 +199,6 @@ impl ComposerEditor {
         let mut textarea = TextArea::from(text.split('\n'));
         textarea.set_cursor_line_style(Style::default());
         textarea.set_wrap_mode(WrapMode::WordOrGlyph);
-        textarea.set_placeholder_text("type a prompt… (Tab to focus, Enter to send)");
         textarea.move_cursor(CursorMove::Bottom);
         textarea.move_cursor(CursorMove::End);
         Self { textarea }
@@ -296,6 +311,12 @@ pub(crate) struct PromptHit {
     pub index: usize,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct SearchHit {
+    pub area: Rect,
+    pub index: usize,
+}
+
 pub struct App {
     pub workspace: Workspace,
     pub active_tab_id: TabId,
@@ -306,10 +327,16 @@ pub struct App {
     pub tab_menu: Option<TabContextMenu>,
     pub close_tab_dialog: Option<CloseTabDialog>,
     pub preview: Option<PromptPreview>,
+    pub search: Option<SearchDialog>,
     pub status: String,
     pub(crate) tab_hits: Vec<TabHit>,
     pub(crate) tab_menu_hits: Vec<TabMenuHit>,
     pub(crate) prompt_hits: Vec<PromptHit>,
+    pub(crate) search_hits: Vec<SearchHit>,
+    /// Folded history texts, positionally aligned with `workspace.history()`.
+    /// Cached because folding the whole history on every keystroke and every
+    /// frame is too slow once history fills up.
+    pub(crate) search_folds: Vec<q_core::search::Folded>,
     pub(crate) composer_area: Option<Rect>,
     pub(crate) preview_page: u16,
     pub(crate) preview_max_scroll: u16,
@@ -333,10 +360,13 @@ impl App {
             tab_menu: None,
             close_tab_dialog: None,
             preview: None,
+            search: None,
             status: String::new(),
             tab_hits: Vec::new(),
             tab_menu_hits: Vec::new(),
             prompt_hits: Vec::new(),
+            search_hits: Vec::new(),
+            search_folds: Vec::new(),
             composer_area: None,
             preview_page: 1,
             preview_max_scroll: 0,
@@ -353,6 +383,53 @@ impl App {
     pub fn selected_prompt(&self) -> Option<&Prompt> {
         self.selected
             .and_then(|index| self.visible_prompts().into_iter().nth(index))
+    }
+
+    /// History entries matching the current search query, newest first.
+    /// Uses the fold cache when it is in step with history, and otherwise folds
+    /// on the spot so callers holding only `&self` still get correct results.
+    pub fn search_results(&self) -> Vec<&HistoryEntry> {
+        let Some(search) = &self.search else {
+            return Vec::new();
+        };
+        let query = q_core::search::Query::new(&search.query);
+        let history = self.workspace.history();
+        let cached = self.search_folds.len() == history.len();
+        history
+            .iter()
+            .enumerate()
+            .filter(|(index, entry)| {
+                if cached {
+                    query.is_match_folded(&self.search_folds[*index])
+                } else {
+                    query.is_match(&entry.text)
+                }
+            })
+            .map(|(_, entry)| entry)
+            .collect()
+    }
+
+    /// Folds history once so later keystrokes and frames only substring-match.
+    pub(crate) fn refresh_search_folds(&mut self) {
+        if self.search_folds.len() == self.workspace.history().len() {
+            return;
+        }
+        self.search_folds = self
+            .workspace
+            .history()
+            .iter()
+            .map(|entry| q_core::search::folded(&entry.text))
+            .collect();
+    }
+
+    pub(crate) fn preview_text(&self) -> Option<String> {
+        match &self.preview.as_ref()?.source {
+            PreviewSource::Prompt(id) => self
+                .workspace
+                .get_prompt(*id)
+                .map(|prompt| prompt.text.clone()),
+            PreviewSource::History(text) => Some(text.clone()),
+        }
     }
 
     pub fn select_tab(&mut self, id: TabId) {
@@ -372,6 +449,8 @@ impl App {
         let previous_index = self.selected;
         let active_tab_id = self.active_tab_id;
         self.workspace = workspace;
+        // Another window may have reordered or rewritten history.
+        self.search_folds.clear();
         self.active_tab_id = self
             .workspace
             .tab(active_tab_id)
@@ -398,11 +477,9 @@ impl App {
         {
             self.close_tab_dialog = None;
         }
-        if self
-            .preview
-            .as_ref()
-            .is_some_and(|preview| self.workspace.get_prompt(preview.id).is_none())
-        {
+        if self.preview.as_ref().is_some_and(|preview| {
+            matches!(&preview.source, PreviewSource::Prompt(id) if self.workspace.get_prompt(*id).is_none())
+        }) {
             self.preview = None;
         }
 
@@ -457,6 +534,16 @@ impl App {
             .map(|_| Input::FocusComposer)
     }
 
+    pub(crate) fn search_input_at(&self, column: u16, row: u16) -> Option<Input> {
+        self.search_hits
+            .iter()
+            .find(|hit| {
+                hit.area
+                    .contains(ratatui::layout::Position::new(column, row))
+            })
+            .map(|hit| Input::SelectHistory(hit.index))
+    }
+
     pub(crate) fn tab_menu_input_at(&self, column: u16, row: u16) -> Option<Input> {
         self.tab_menu_hits
             .iter()
@@ -470,85 +557,16 @@ impl App {
     pub(crate) fn dialog_open(&self) -> bool {
         self.tab_dialog.is_some() || self.close_tab_dialog.is_some()
     }
+
+    /// Any surface that takes over input from the queue and composer panes.
+    pub(crate) fn overlay_open(&self) -> bool {
+        self.dialog_open()
+            || self.tab_menu.is_some()
+            || self.search.is_some()
+            || self.preview.is_some()
+    }
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use q_core::Queue;
-
-    #[test]
-    fn new_app_has_queue_focus_and_selects_first_prompt() {
-        let mut queue = Queue::new();
-        queue.add_text("hello").unwrap();
-        let app = App::new(queue);
-        assert_eq!(app.focus, Pane::Queue);
-        assert_eq!(app.selected, Some(0));
-        assert_eq!(app.composer.text(), "");
-    }
-
-    #[test]
-    fn empty_workspace_has_no_selection() {
-        let app = App::new(Workspace::new());
-        assert_eq!(app.selected, None);
-    }
-
-    #[test]
-    fn selecting_empty_tab_focuses_composer() {
-        let mut workspace = Workspace::new();
-        let first = workspace.first_tab_id();
-        workspace
-            .add_prompt(first, Prompt::new("first").unwrap())
-            .unwrap();
-        let empty = workspace.create_tab("empty").unwrap();
-        let mut app = App::new(workspace);
-        app.select_tab(empty);
-        assert_eq!(app.focus, Pane::Composer);
-        assert_eq!(app.selected, None);
-    }
-
-    #[test]
-    fn replace_workspace_closes_preview_of_removed_prompt() {
-        let mut workspace = Workspace::new();
-        let tab = workspace.first_tab_id();
-        let prompt = Prompt::new("preview me").unwrap();
-        let id = prompt.id;
-        workspace.add_prompt(tab, prompt).unwrap();
-        let mut app = App::new(workspace);
-        app.preview = Some(PromptPreview { id, scroll: 3 });
-
-        app.replace_workspace(Workspace::new());
-
-        assert_eq!(app.preview, None);
-    }
-
-    #[test]
-    fn composer_starts_at_end_of_loaded_text() {
-        let mut composer = ComposerEditor::from_text("first\nsecond");
-        composer.insert_char('!');
-        assert_eq!(composer.text(), "first\nsecond!");
-    }
-
-    #[test]
-    fn replace_workspace_preserves_tab_selection_and_composer() {
-        let mut workspace = Workspace::new();
-        let tab = workspace.create_tab("work").unwrap();
-        let prompt = Prompt::new("selected").unwrap();
-        let selected_id = prompt.id;
-        workspace.add_prompt(tab, prompt).unwrap();
-        let mut app = App::new(workspace.clone());
-        app.select_tab(tab);
-        app.focus = Pane::Composer;
-        app.composer.set_text("draft");
-
-        app.replace_workspace(workspace);
-
-        assert_eq!(app.active_tab_id, tab);
-        assert_eq!(
-            app.selected_prompt().map(|prompt| prompt.id),
-            Some(selected_id)
-        );
-        assert_eq!(app.composer.text(), "draft");
-        assert_eq!(app.focus, Pane::Composer);
-    }
-}
+#[path = "../tests/unit/app.rs"]
+mod tests;

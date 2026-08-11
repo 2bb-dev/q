@@ -50,9 +50,27 @@ impl Tab {
     }
 }
 
+/// A prompt that was added at some point, kept even after the prompt is
+/// copied, deleted, or its tab is closed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HistoryEntry {
+    pub text: String,
+    pub created_at: DateTime<Utc>,
+}
+
+/// Newest entries are kept; older ones are trimmed.
+pub const HISTORY_LIMIT: usize = 500;
+
+/// Upper bound on the bytes of prompt text kept in history. Prompt length is
+/// unbounded, so the entry count alone does not bound the size of the file the
+/// TUI reloads and every mutation rewrites.
+pub const HISTORY_BYTE_BUDGET: usize = 256 * 1024;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Workspace {
     tabs: Vec<Tab>,
+    #[serde(default)]
+    history: Vec<HistoryEntry>,
 }
 
 impl Default for Workspace {
@@ -80,6 +98,7 @@ impl Workspace {
                 activity_at,
                 queue: Queue::new(),
             }],
+            history: Vec::new(),
         }
     }
 
@@ -90,18 +109,89 @@ impl Workspace {
             .map(|prompt| prompt.created_at)
             .max()
             .unwrap_or(migrated_at);
-        Self {
+        let mut workspace = Self {
             tabs: vec![Tab {
                 id: TabId::initial(),
                 name: "1".to_string(),
                 activity_at,
                 queue,
             }],
-        }
+            history: Vec::new(),
+        };
+        workspace.seed_history_from_prompts();
+        workspace
     }
 
     pub fn tabs(&self) -> &[Tab] {
         &self.tabs
+    }
+
+    /// Every prompt ever added, newest first.
+    pub fn history(&self) -> &[HistoryEntry] {
+        &self.history
+    }
+
+    /// Fills history from the prompts currently queued, for workspaces stored
+    /// before history was recorded.
+    pub(crate) fn seed_history_from_prompts(&mut self) {
+        let mut prompts: Vec<_> = self
+            .tabs
+            .iter()
+            .flat_map(|tab| tab.queue.iter())
+            .map(|prompt| HistoryEntry {
+                text: prompt.text.clone(),
+                created_at: prompt.created_at,
+            })
+            .collect();
+        prompts.sort_by_key(|entry| entry.created_at);
+        for entry in prompts {
+            self.record_history(entry.text, entry.created_at);
+        }
+    }
+
+    fn record_history(&mut self, text: String, created_at: DateTime<Utc>) {
+        self.history.retain(|entry| entry.text != text);
+        self.history.insert(0, HistoryEntry { text, created_at });
+        self.trim_history();
+    }
+
+    /// Drops the oldest entries until history fits both the entry count and the
+    /// byte budget. The newest entry is always kept, even when oversized on its
+    /// own, so a freshly added prompt is never immediately unsearchable.
+    fn trim_history(&mut self) {
+        self.history.truncate(HISTORY_LIMIT);
+        let mut used = 0usize;
+        let mut kept = 0usize;
+        for entry in &self.history {
+            used = used.saturating_add(entry.text.len());
+            kept += 1;
+            if used > HISTORY_BYTE_BUDGET {
+                break;
+            }
+        }
+        self.history.truncate(kept.max(1));
+    }
+
+    /// Forgets the single history entry whose text matches exactly.
+    pub fn forget_history(&mut self, text: &str) -> bool {
+        let before = self.history.len();
+        self.history.retain(|entry| entry.text != text);
+        before != self.history.len()
+    }
+
+    /// Forgets every history entry matching `query`, returning how many went.
+    pub fn forget_history_matching(&mut self, query: &str) -> usize {
+        let query = crate::search::Query::new(query);
+        let before = self.history.len();
+        self.history.retain(|entry| !query.is_match(&entry.text));
+        before - self.history.len()
+    }
+
+    /// Forgets every history entry.
+    pub fn clear_history(&mut self) -> usize {
+        let forgotten = self.history.len();
+        self.history.clear();
+        forgotten
     }
 
     pub fn tab(&self, id: TabId) -> Option<&Tab> {
@@ -191,6 +281,7 @@ impl Workspace {
     pub fn add_prompt(&mut self, tab_id: TabId, prompt: Prompt) -> Result<PromptId> {
         let prompt_id = prompt.id;
         let activity_at = prompt.created_at;
+        let history_text = prompt.text.clone();
         let tab = self
             .tabs
             .iter_mut()
@@ -198,6 +289,7 @@ impl Workspace {
             .ok_or_else(|| CoreError::TabNotFound(tab_id.0.to_string()))?;
         tab.queue.add(prompt);
         tab.activity_at = tab.activity_at.max(activity_at);
+        self.record_history(history_text, activity_at);
         self.normalize();
         Ok(prompt_id)
     }
@@ -287,6 +379,9 @@ impl Workspace {
         for tab in &mut self.tabs {
             tab.queue.normalize();
         }
+        self.history
+            .sort_by_key(|entry| std::cmp::Reverse(entry.created_at));
+        self.trim_history();
         self.tabs.sort_by(|left, right| {
             right
                 .activity_at
@@ -328,142 +423,5 @@ fn normalize_name(name: &str) -> Result<String> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use chrono::Duration;
-
-    #[test]
-    fn new_workspace_starts_with_tab_one() {
-        let workspace = Workspace::new();
-        assert_eq!(workspace.tabs().len(), 1);
-        assert_eq!(workspace.tabs()[0].name(), "1");
-        assert!(workspace.tabs()[0].queue().is_empty());
-    }
-
-    #[test]
-    fn tab_names_are_trimmed_and_case_insensitively_unique() {
-        let mut workspace = Workspace::new();
-        let id = workspace.create_tab("  Work  ").unwrap();
-        assert_eq!(workspace.tab(id).unwrap().name(), "Work");
-        assert!(workspace.create_tab("work").is_err());
-        assert!(workspace.create_tab("  ").is_err());
-    }
-
-    #[test]
-    fn rename_preserves_tab_data_and_order() {
-        let now = Utc::now();
-        let mut workspace = Workspace::with_initial_activity(now);
-        let id = workspace
-            .create_tab_with(TabId::new(), "work", now + Duration::seconds(1))
-            .unwrap();
-        let prompt = Prompt::new("hello").unwrap();
-        let prompt_id = prompt.id;
-        workspace.add_prompt(id, prompt).unwrap();
-        let activity = workspace.tab(id).unwrap().activity_at();
-
-        workspace.rename_tab(id, "renamed").unwrap();
-
-        let tab = workspace.tab(id).unwrap();
-        assert_eq!(tab.name(), "renamed");
-        assert_eq!(tab.activity_at(), activity);
-        assert_eq!(tab.queue().get(prompt_id).unwrap().text, "hello");
-    }
-
-    #[test]
-    fn adding_prompt_moves_tab_first() {
-        let now = Utc::now();
-        let mut workspace = Workspace::with_initial_activity(now);
-        let second = workspace
-            .create_tab_with(TabId::new(), "second", now + Duration::seconds(1))
-            .unwrap();
-        let first = workspace.resolve_tab("1").unwrap();
-        assert_eq!(workspace.first_tab_id(), second);
-
-        let mut prompt = Prompt::new("latest").unwrap();
-        prompt.created_at = now + Duration::seconds(2);
-        workspace.add_prompt(first, prompt).unwrap();
-
-        assert_eq!(workspace.first_tab_id(), first);
-    }
-
-    #[test]
-    fn close_tab_removes_it_and_its_prompts() {
-        let mut workspace = Workspace::new();
-        let closed = workspace.create_tab("closed").unwrap();
-        let kept = workspace.resolve_tab("1").unwrap();
-        let prompt = Prompt::new("discarded").unwrap();
-        let prompt_id = prompt.id;
-        workspace.add_prompt(closed, prompt).unwrap();
-
-        workspace.close_tab(closed).unwrap();
-
-        assert_eq!(workspace.tabs().len(), 1);
-        assert_eq!(workspace.first_tab_id(), kept);
-        assert!(workspace.get_prompt(prompt_id).is_none());
-    }
-
-    #[test]
-    fn last_tab_cannot_be_closed() {
-        let mut workspace = Workspace::new();
-        let only = workspace.first_tab_id();
-
-        let error = workspace.close_tab(only).unwrap_err();
-
-        assert_eq!(error.to_string(), "invalid tab: cannot close the last tab");
-        assert_eq!(workspace.tabs().len(), 1);
-    }
-
-    #[test]
-    fn out_of_order_prompt_add_does_not_regress_tab_activity() {
-        let now = Utc::now();
-        let mut workspace = Workspace::with_initial_activity(now);
-        let first = workspace.first_tab_id();
-        let second = workspace
-            .create_tab_with(TabId::new(), "second", now + Duration::seconds(5))
-            .unwrap();
-        let mut newer = Prompt::new("newer").unwrap();
-        newer.created_at = now + Duration::seconds(10);
-        workspace.add_prompt(first, newer).unwrap();
-        let mut older = Prompt::new("older committed later").unwrap();
-        older.created_at = now + Duration::seconds(2);
-
-        workspace.add_prompt(first, older).unwrap();
-
-        assert_eq!(workspace.first_tab_id(), first);
-        assert_eq!(
-            workspace.tab(first).unwrap().activity_at(),
-            now + Duration::seconds(10)
-        );
-        assert_eq!(workspace.tabs()[1].id(), second);
-    }
-
-    #[test]
-    fn context_requires_name_only_when_multiple_tabs_exist() {
-        let mut workspace = Workspace::new();
-        assert!(workspace.resolve_context_tab(None).is_ok());
-        workspace.create_tab("work").unwrap();
-        assert!(matches!(
-            workspace.resolve_context_tab(None),
-            Err(CoreError::TabRequired(_))
-        ));
-        assert_eq!(
-            workspace.resolve_context_tab(Some("WORK")).unwrap(),
-            workspace.resolve_tab("work").unwrap()
-        );
-    }
-
-    #[test]
-    fn prompt_operations_find_owning_tab_globally() {
-        let mut workspace = Workspace::new();
-        let second = workspace.create_tab("second").unwrap();
-        let prompt = Prompt::new("global").unwrap();
-        let id = prompt.id;
-        workspace.add_prompt(second, prompt).unwrap();
-
-        assert_eq!(workspace.resolve_prompt(&id.to_string()).unwrap(), id);
-        workspace.set_prompt_pinned(id, true).unwrap();
-        assert!(workspace.get_prompt(id).unwrap().pinned);
-        assert_eq!(workspace.remove_prompt(id).unwrap().text, "global");
-        assert!(workspace.get_prompt(id).is_none());
-    }
-}
+#[path = "../tests/unit/workspace.rs"]
+mod tests;

@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use crate::error::{CoreError, Result};
 use crate::{Queue, Workspace};
 
-pub const SCHEMA_VERSION: u32 = 2;
+pub const SCHEMA_VERSION: u32 = 3;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FileFingerprint {
@@ -39,7 +39,7 @@ struct QueueFileV1 {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-struct WorkspaceFileV2 {
+struct WorkspaceFile {
     schema: u32,
     workspace: Workspace,
 }
@@ -59,8 +59,14 @@ pub fn load(path: &Path) -> Result<Workspace> {
             let parsed: QueueFileV1 = serde_json::from_str(&data)?;
             Workspace::from_legacy_queue(parsed.queue, Utc::now())
         }
+        2 => {
+            let parsed: WorkspaceFile = serde_json::from_str(&data)?;
+            let mut workspace = parsed.workspace;
+            workspace.seed_history_from_prompts();
+            workspace
+        }
         SCHEMA_VERSION => {
-            let parsed: WorkspaceFileV2 = serde_json::from_str(&data)?;
+            let parsed: WorkspaceFile = serde_json::from_str(&data)?;
             parsed.workspace
         }
         schema => return Err(CoreError::UnsupportedSchema(schema)),
@@ -75,7 +81,7 @@ pub fn save(path: &Path, workspace: &Workspace) -> Result<()> {
         fs::create_dir_all(parent)?;
     }
     let tmp = path.with_extension("json.tmp");
-    let file = WorkspaceFileV2 {
+    let file = WorkspaceFile {
         schema: SCHEMA_VERSION,
         workspace: workspace.clone(),
     };
@@ -86,106 +92,5 @@ pub fn save(path: &Path, workspace: &Workspace) -> Result<()> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::prompt::Prompt;
-    use tempfile::TempDir;
-
-    #[test]
-    fn load_missing_file_returns_initial_workspace() {
-        let dir = TempDir::new().unwrap();
-        let path = dir.path().join("queue.json");
-        let workspace = load(&path).unwrap();
-        assert_eq!(workspace.tabs().len(), 1);
-        assert_eq!(workspace.tabs()[0].name(), "1");
-    }
-
-    #[test]
-    fn save_then_load_roundtrips() {
-        let dir = TempDir::new().unwrap();
-        let path = dir.path().join("queue.json");
-        let mut workspace = Workspace::new();
-        let first = workspace.first_tab_id();
-        workspace
-            .add_prompt(first, Prompt::new("hello").unwrap())
-            .unwrap();
-        let work = workspace.create_tab("work").unwrap();
-        workspace
-            .add_prompt(work, Prompt::new("world").unwrap())
-            .unwrap();
-
-        save(&path, &workspace).unwrap();
-        let loaded = load(&path).unwrap();
-
-        assert_eq!(loaded.tabs().len(), 2);
-        assert_eq!(loaded.tab(work).unwrap().queue().len(), 1);
-        assert_eq!(loaded.tab(first).unwrap().queue().len(), 1);
-    }
-
-    #[test]
-    fn schema_one_migrates_without_prompt_loss() {
-        let dir = TempDir::new().unwrap();
-        let path = dir.path().join("queue.json");
-        let mut queue = Queue::new();
-        let mut prompt = Prompt::new("legacy").unwrap();
-        prompt.pinned = true;
-        let id = prompt.id;
-        let created_at = prompt.created_at;
-        queue.add(prompt);
-        let legacy = QueueFileV1 { schema: 1, queue };
-        fs::write(&path, serde_json::to_string_pretty(&legacy).unwrap()).unwrap();
-
-        let workspace = load(&path).unwrap();
-        let migrated = workspace.get_prompt(id).unwrap();
-
-        assert_eq!(workspace.tabs().len(), 1);
-        assert_eq!(workspace.tabs()[0].name(), "1");
-        assert_eq!(migrated.text, "legacy");
-        assert!(migrated.pinned);
-        assert_eq!(migrated.created_at, created_at);
-        assert!(fs::read_to_string(&path).unwrap().contains("\"schema\": 1"));
-    }
-
-    #[test]
-    fn unsupported_schema_is_rejected() {
-        let dir = TempDir::new().unwrap();
-        let path = dir.path().join("queue.json");
-        fs::write(&path, r#"{"schema":99}"#).unwrap();
-        assert!(matches!(load(&path), Err(CoreError::UnsupportedSchema(99))));
-    }
-
-    #[test]
-    fn save_is_atomic_no_tmp_left_behind() {
-        let dir = TempDir::new().unwrap();
-        let path = dir.path().join("queue.json");
-        save(&path, &Workspace::new()).unwrap();
-        assert!(path.exists());
-        assert!(!path.with_extension("json.tmp").exists());
-    }
-
-    #[test]
-    fn load_empty_file_returns_initial_workspace() {
-        let dir = TempDir::new().unwrap();
-        let path = dir.path().join("queue.json");
-        fs::write(&path, "").unwrap();
-        assert_eq!(load(&path).unwrap().tabs().len(), 1);
-    }
-
-    #[test]
-    fn schema_version_is_written() {
-        let dir = TempDir::new().unwrap();
-        let path = dir.path().join("queue.json");
-        save(&path, &Workspace::new()).unwrap();
-        assert!(fs::read_to_string(&path).unwrap().contains("\"schema\": 2"));
-    }
-
-    #[test]
-    fn fingerprint_tracks_missing_and_saved_workspace() {
-        let dir = TempDir::new().unwrap();
-        let path = dir.path().join("queue.json");
-        assert_eq!(fingerprint(&path).unwrap(), None);
-
-        save(&path, &Workspace::new()).unwrap();
-        assert!(fingerprint(&path).unwrap().is_some());
-    }
-}
+#[path = "../tests/unit/storage.rs"]
+mod tests;

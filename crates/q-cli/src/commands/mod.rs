@@ -1,5 +1,6 @@
 pub mod add;
 pub mod copy;
+pub mod history;
 pub mod list;
 pub mod pin;
 pub mod pop;

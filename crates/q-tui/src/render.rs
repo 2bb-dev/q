@@ -1,9 +1,11 @@
-use crate::app::{App, Pane, PromptHit, TabHit, TabHitTarget, TabMenuAction, TabMenuHit};
+use crate::app::{
+    App, Pane, PromptHit, SearchHit, TabHit, TabHitTarget, TabMenuAction, TabMenuHit,
+};
 use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, Paragraph, Wrap},
+    widgets::{Block, Borders, Clear, Paragraph},
     Frame,
 };
 
@@ -11,6 +13,8 @@ const ACCENT: Color = Color::Cyan;
 const MUTED: Color = Color::DarkGray;
 const TAB_BAR_BG: Color = Color::Rgb(32, 32, 32);
 const CREATE_WIDTH: u16 = 3;
+const BULLET_WIDTH: usize = 3;
+const COLLAPSED_ROWS: usize = 3;
 
 pub fn draw(frame: &mut Frame, app: &mut App, cursor_on: bool) {
     let area = frame.area();
@@ -29,20 +33,18 @@ pub fn draw(frame: &mut Frame, app: &mut App, cursor_on: bool) {
         ])
         .split(area);
 
+    let overlay = Rect::new(
+        area.x,
+        outer[2].y,
+        area.width,
+        outer[6].bottom().saturating_sub(outer[2].y),
+    );
     render_tabs(frame, app, outer[1]);
     render_queue(frame, app, outer[3]);
     render_composer(frame, app, cursor_on, outer[5]);
     render_footer(frame, app, outer[7]);
-    render_preview(
-        frame,
-        app,
-        Rect::new(
-            area.x,
-            outer[2].y,
-            area.width,
-            outer[6].bottom().saturating_sub(outer[2].y),
-        ),
-    );
+    render_search(frame, app, cursor_on, overlay);
+    render_preview(frame, app, overlay);
     render_tab_menu(frame, app);
     render_tab_dialog(frame, app, cursor_on);
     render_close_tab_dialog(frame, app);
@@ -152,7 +154,7 @@ fn render_tabs(frame: &mut Frame, app: &mut App, area: Rect) {
 
 fn render_queue(frame: &mut Frame, app: &mut App, area: Rect) {
     app.prompt_hits.clear();
-    let focused = app.focus == Pane::Queue && !app.dialog_open() && app.tab_menu.is_none();
+    let focused = app.focus == Pane::Queue && !app.overlay_open();
     let prompts = app.visible_prompts();
     let mut lines = Vec::new();
     let mut hits = Vec::new();
@@ -163,11 +165,11 @@ fn render_queue(frame: &mut Frame, app: &mut App, area: Rect) {
             lines.push(Line::raw(""));
             visual_row += 1;
         }
-        let line = row_line(index, app.selected, focused, prompt.pinned, &prompt.text);
+        let rows = collapsed_rows(&prompt.text, area.width);
         let row_height = if area.width == 0 {
             0
         } else {
-            (line.width() as u16).div_ceil(area.width).max(1)
+            u16::try_from(rows.len()).unwrap_or(u16::MAX)
         };
         if visual_row < area.height && row_height > 0 {
             hits.push(PromptHit {
@@ -181,49 +183,78 @@ fn render_queue(frame: &mut Frame, app: &mut App, area: Rect) {
             });
         }
         visual_row = visual_row.saturating_add(row_height);
-        lines.push(line);
+        lines.extend(row_lines(rows, index, app.selected, focused, prompt.pinned));
     }
     app.prompt_hits = hits;
-    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), area);
+    frame.render_widget(Paragraph::new(lines), area);
 }
 
-fn row_line(
+fn collapsed_rows(text: &str, width: u16) -> Vec<String> {
+    let inner_width = (width as usize).saturating_sub(BULLET_WIDTH + 1).max(1);
+    let condensed = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    let mut rows: Vec<String> = wrap_lines(&condensed, inner_width)
+        .into_iter()
+        .map(|row| row.trim_end().to_string())
+        .collect();
+    if rows.len() > COLLAPSED_ROWS {
+        rows.truncate(COLLAPSED_ROWS);
+        if let Some(last) = rows.last_mut() {
+            let mut chars: Vec<char> = last.chars().collect();
+            while chars.len() + 1 > inner_width {
+                chars.pop();
+            }
+            chars.push('…');
+            *last = chars.into_iter().collect();
+        }
+    }
+    rows
+}
+
+fn row_lines(
+    rows: Vec<String>,
     index: usize,
     selected: Option<usize>,
     focused: bool,
     pinned: bool,
-    text: &str,
-) -> Line<'static> {
+) -> Vec<Line<'static>> {
     let is_selected = Some(index) == selected;
-    let first = text.lines().next().unwrap_or("").to_string();
     let bullet_style = if pinned {
         Style::default().fg(ACCENT)
     } else {
         dim()
     };
-    let bullet = Span::styled(" • ", bullet_style);
-
-    let body = if is_selected && focused {
-        Span::styled(
-            format!(" {first} "),
-            Style::default().add_modifier(Modifier::REVERSED),
-        )
+    let body_style = if pinned {
+        Style::default().fg(ACCENT)
+    } else if is_selected {
+        Style::default()
     } else {
-        let style = if pinned {
-            Style::default().fg(ACCENT)
-        } else if is_selected {
-            Style::default()
-        } else {
-            dim()
-        };
-        Span::styled(first, style)
+        dim()
     };
-    Line::from(vec![bullet, body])
+
+    rows.into_iter()
+        .enumerate()
+        .map(|(row, text)| {
+            let prefix = if row == 0 {
+                Span::styled(" • ", bullet_style)
+            } else {
+                Span::raw(" ".repeat(BULLET_WIDTH))
+            };
+            let body = if is_selected && focused {
+                Span::styled(
+                    format!(" {text} "),
+                    Style::default().add_modifier(Modifier::REVERSED),
+                )
+            } else {
+                Span::styled(text, body_style)
+            };
+            Line::from(vec![prefix, body])
+        })
+        .collect()
 }
 
 fn render_composer(frame: &mut Frame, app: &mut App, cursor_on: bool, area: Rect) {
     app.composer_area = Some(area);
-    let focused = app.focus == Pane::Composer && !app.dialog_open() && app.tab_menu.is_none();
+    let focused = app.focus == Pane::Composer && !app.overlay_open();
     let prefix_style = if focused {
         Style::default().fg(ACCENT)
     } else {
@@ -246,19 +277,123 @@ fn render_composer(frame: &mut Frame, app: &mut App, cursor_on: bool, area: Rect
 
 fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
     let hints = if app.status.is_empty() {
-        "p pin  ·  e edit  ·  f open  ·  tab switch"
+        "p pin  ·  e edit  ·  f open  ·  ⌘/ history  ·  tab switch"
     } else {
         app.status.as_str()
     };
+    // Align with the composer's `›`, which sits one column into the prefix.
+    let area = Rect::new(
+        area.x.saturating_add(1),
+        area.y,
+        area.width.saturating_sub(1),
+        area.height,
+    );
     frame.render_widget(Paragraph::new(Line::styled(hints, dim())), area);
 }
 
+fn render_search(frame: &mut Frame, app: &mut App, cursor_on: bool, area: Rect) {
+    app.search_hits.clear();
+    let Some(query) = app.search.as_ref().map(|search| search.query.clone()) else {
+        return;
+    };
+    app.refresh_search_folds();
+    if area.width < 8 || area.height < 5 {
+        return;
+    }
+    let block = Block::default()
+        .title(" History ")
+        .title_bottom(Line::styled(
+            " type to filter · ↑↓ select · Enter open · ^d forget · Esc close ",
+            dim(),
+        ))
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(ACCENT));
+    let inner = block.inner(area);
+    frame.render_widget(Clear, area);
+    frame.render_widget(block, area);
+
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled("/ ", dim()),
+            Span::raw(query),
+            Span::styled(
+                if cursor_on { "█" } else { " " },
+                Style::default().fg(ACCENT),
+            ),
+        ])),
+        Rect::new(inner.x, inner.y, inner.width, 1),
+    );
+
+    let list_area = Rect::new(
+        inner.x,
+        inner.y.saturating_add(1),
+        inner.width,
+        inner.height.saturating_sub(1),
+    );
+    if list_area.height == 0 {
+        return;
+    }
+
+    let results: Vec<String> = app
+        .search_results()
+        .iter()
+        .map(|entry| condense(&entry.text, list_area.width.saturating_sub(2) as usize))
+        .collect();
+    if results.is_empty() {
+        frame.render_widget(
+            Paragraph::new(Line::styled(" no matching prompts", dim())),
+            list_area,
+        );
+        return;
+    }
+
+    let selected = app
+        .search
+        .as_ref()
+        .map(|search| search.selected)
+        .unwrap_or(0)
+        .min(results.len() - 1);
+    if let Some(search) = app.search.as_mut() {
+        search.selected = selected;
+    }
+    let height = list_area.height as usize;
+    let offset = selected.saturating_sub(height.saturating_sub(1));
+
+    let mut lines = Vec::new();
+    for (row, text) in results.iter().skip(offset).take(height).enumerate() {
+        let index = offset + row;
+        let style = if index == selected {
+            Style::default().add_modifier(Modifier::REVERSED)
+        } else {
+            Style::default()
+        };
+        lines.push(Line::styled(format!(" {text} "), style));
+        app.search_hits.push(SearchHit {
+            area: Rect::new(list_area.x, list_area.y + row as u16, list_area.width, 1),
+            index,
+        });
+    }
+    frame.render_widget(Paragraph::new(lines), list_area);
+}
+
+fn condense(text: &str, width: usize) -> String {
+    let condensed = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if condensed.chars().count() <= width.max(1) {
+        return condensed;
+    }
+    let mut clipped: String = condensed
+        .chars()
+        .take(width.max(1).saturating_sub(1))
+        .collect();
+    clipped.push('…');
+    clipped
+}
+
 fn render_preview(frame: &mut Frame, app: &mut App, preview_area: Rect) {
-    let Some((text, scroll)) = app.preview.as_ref().and_then(|preview| {
-        app.workspace
-            .get_prompt(preview.id)
-            .map(|prompt| (prompt.text.clone(), preview.scroll))
-    }) else {
+    let Some((text, scroll)) = app
+        .preview_text()
+        .zip(app.preview.as_ref().map(|preview| preview.scroll))
+    else {
         return;
     };
     if preview_area.width < 8 || preview_area.height < 3 {
@@ -452,226 +587,5 @@ fn dim() -> Style {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use q_core::{Prompt, Workspace};
-    use ratatui::{backend::TestBackend, buffer::Buffer, Terminal};
-
-    fn buffer_as_text(buffer: &Buffer) -> String {
-        let mut output = String::new();
-        for y in 0..buffer.area.height {
-            for x in 0..buffer.area.width {
-                output.push_str(buffer[(x, y)].symbol());
-            }
-            output.push('\n');
-        }
-        output
-    }
-
-    fn render(app: &mut App, cursor_on: bool, width: u16) -> String {
-        let mut terminal = Terminal::new(TestBackend::new(width, 20)).unwrap();
-        terminal.draw(|frame| draw(frame, app, cursor_on)).unwrap();
-        buffer_as_text(terminal.backend().buffer())
-    }
-
-    #[test]
-    fn empty_workspace_renders_initial_tab_composer_and_footer() {
-        let mut app = App::new(Workspace::new());
-        let text = render(&mut app, false, 80);
-        assert!(text.contains(" 1 "), "missing initial tab; got:\n{text}");
-        assert!(text.contains(" + "), "missing create tab; got:\n{text}");
-        assert!(text.contains("type a prompt"));
-        assert!(text.contains("p pin"));
-        assert!(!text.contains("[ ] tabs"));
-        assert!(!text.contains("^t new"));
-        assert!(!text.contains("r rename"));
-    }
-
-    #[test]
-    fn active_tab_renders_only_its_prompts() {
-        let mut workspace = Workspace::new();
-        let first = workspace.first_tab_id();
-        workspace
-            .add_prompt(first, Prompt::new("first prompt").unwrap())
-            .unwrap();
-        let second = workspace.create_tab("work").unwrap();
-        workspace
-            .add_prompt(second, Prompt::new("work prompt").unwrap())
-            .unwrap();
-        let mut app = App::new(workspace);
-        app.select_tab(second);
-        let text = render(&mut app, true, 80);
-        assert!(text.contains("work prompt"));
-        assert!(!text.contains("first prompt"));
-    }
-
-    #[test]
-    fn tab_context_menu_renders_rename_and_close_targets() {
-        let mut app = App::new(Workspace::new());
-        let id = app.active_tab_id;
-        app.tab_menu = Some(crate::app::TabContextMenu {
-            tab_id: id,
-            column: 2,
-            row: 1,
-            selected: TabMenuAction::Rename,
-        });
-
-        let text = render(&mut app, false, 80);
-
-        assert!(text.contains("Rename"));
-        assert!(text.contains("Close"));
-        assert_eq!(app.tab_menu_hits.len(), 2);
-    }
-
-    #[test]
-    fn close_tab_confirmation_warns_about_prompt_deletion() {
-        let mut app = App::new(Workspace::new());
-        app.close_tab_dialog = Some(crate::app::CloseTabDialog {
-            tab_id: app.active_tab_id,
-            tab_name: "work".to_string(),
-        });
-
-        let text = render(&mut app, false, 80);
-
-        assert!(text.contains("Close \"work\"?"));
-        assert!(text.contains("deletes all prompts"));
-        assert!(text.contains("Enter close"));
-    }
-
-    #[test]
-    fn tab_dialog_renders_value_and_error() {
-        let mut app = App::new(Workspace::new());
-        let mut dialog = crate::app::TabDialog::create();
-        dialog.value = "work".to_string();
-        dialog.error = "invalid tab".to_string();
-        app.tab_dialog = Some(dialog);
-        let text = render(&mut app, true, 80);
-        assert!(text.contains("New tab"));
-        assert!(text.contains("work"));
-        assert!(text.contains("invalid tab"));
-    }
-
-    #[test]
-    fn rendered_prompts_and_composer_have_click_targets() {
-        let mut workspace = Workspace::new();
-        let tab = workspace.first_tab_id();
-        workspace
-            .add_prompt(tab, Prompt::new("click me").unwrap())
-            .unwrap();
-        let mut app = App::new(workspace);
-
-        render(&mut app, false, 80);
-
-        let prompt_area = app.prompt_hits[0].area;
-        assert_eq!(
-            app.content_input_at(prompt_area.x, prompt_area.y),
-            Some(crate::app::Input::SelectPrompt(0))
-        );
-        let composer_area = app.composer_area.unwrap();
-        assert_eq!(
-            app.content_input_at(composer_area.x, composer_area.y),
-            Some(crate::app::Input::FocusComposer)
-        );
-    }
-
-    #[test]
-    fn wrapped_prompt_is_clickable_across_its_rendered_height() {
-        let mut workspace = Workspace::new();
-        let tab = workspace.first_tab_id();
-        workspace
-            .add_prompt(
-                tab,
-                Prompt::new("a prompt long enough to wrap across rows").unwrap(),
-            )
-            .unwrap();
-        let mut app = App::new(workspace);
-
-        render(&mut app, false, 12);
-
-        let area = app.prompt_hits[0].area;
-        assert!(area.height > 1);
-        assert_eq!(
-            app.content_input_at(area.x, area.bottom() - 1),
-            Some(crate::app::Input::SelectPrompt(0))
-        );
-    }
-
-    #[test]
-    fn preview_renders_full_prompt_and_scrolls_to_the_end() {
-        let mut workspace = Workspace::new();
-        let tab = workspace.first_tab_id();
-        let text = (0..40)
-            .map(|index| format!("line-{index}"))
-            .collect::<Vec<_>>()
-            .join("\n");
-        workspace
-            .add_prompt(tab, Prompt::new(text).unwrap())
-            .unwrap();
-        let mut app = App::new(workspace);
-        let id = app.visible_prompts()[0].id;
-        app.preview = Some(crate::app::PromptPreview { id, scroll: 0 });
-
-        let top = render(&mut app, false, 60);
-        assert!(top.contains("Prompt"));
-        assert!(top.contains("Esc close"));
-        assert!(top.contains("line-0"));
-        assert!(!top.contains("line-39"));
-        assert!(app.preview_max_scroll > 0);
-
-        app.preview.as_mut().unwrap().scroll = u16::MAX;
-        let bottom = render(&mut app, false, 60);
-        assert!(bottom.contains("line-39"));
-        assert_eq!(app.preview.unwrap().scroll, app.preview_max_scroll);
-    }
-
-    #[test]
-    fn preview_wraps_long_lines_and_preserves_indentation() {
-        assert_eq!(
-            wrap_lines("alpha beta gamma", 11),
-            vec!["alpha beta ".to_string(), "gamma".to_string()]
-        );
-        assert_eq!(
-            wrap_lines("supercalifragilistic", 10),
-            vec!["supercalif".to_string(), "ragilistic".to_string()]
-        );
-        assert_eq!(
-            wrap_lines("    indented", 20),
-            vec!["    indented".to_string()]
-        );
-        assert_eq!(wrap_lines("a\n\nb", 5), vec!["a", "", "b"]);
-    }
-
-    #[test]
-    fn rendered_tabs_and_create_button_have_click_targets() {
-        let mut app = App::new(Workspace::new());
-        render(&mut app, false, 80);
-        assert_eq!(app.tab_hits.len(), 2);
-        for hit in &app.tab_hits {
-            assert!(app.tab_input_at(hit.area.x, hit.area.y).is_some());
-        }
-        assert_eq!(app.tab_hits[0].area.right(), app.tab_hits[1].area.x);
-    }
-
-    #[test]
-    fn tab_bar_has_a_full_width_background() {
-        let mut app = App::new(Workspace::new());
-        let mut terminal = Terminal::new(TestBackend::new(40, 20)).unwrap();
-        terminal.draw(|frame| draw(frame, &mut app, false)).unwrap();
-
-        assert_eq!(terminal.backend().buffer()[(39, 1)].bg, TAB_BAR_BG);
-    }
-
-    #[test]
-    fn narrow_tab_bar_keeps_active_tab_and_create_visible() {
-        let mut workspace = Workspace::new();
-        for name in ["backend", "website", "documentation"] {
-            workspace.create_tab(name).unwrap();
-        }
-        let active = workspace.resolve_tab("1").unwrap();
-        let mut app = App::new(workspace);
-        app.select_tab(active);
-        let text = render(&mut app, false, 18);
-        assert!(text.contains(" 1 "));
-        assert!(text.contains(" + "));
-    }
-}
+#[path = "../tests/unit/render.rs"]
+mod tests;

@@ -4,8 +4,23 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Changed
+- **Breaking:** bumped the `queue.json` schema from 2 to 3 to store prompt history. Existing files are migrated automatically on load, seeding history from the prompts currently queued, but once a 0.2 binary saves the file, `q` 0.1.0 will refuse to read it with `unsupported schema: 3`. Back up `queue.json` before upgrading if you still need to run an older binary against it
+- Collapsed queue rows to at most three lines of condensed text, marking longer prompts with a trailing ellipsis
+- Aligned the footer hints with the composer prompt marker
+- Moved every unit test out of `src/` into `crates/<pkg>/tests/unit/`, attached to its module with `#[cfg(test)] #[path = ...] mod tests;`
+
+### Removed
+- Removed the composer placeholder text
+
 ### Added
-- Added a scrollable full-text preview for the selected prompt, opened with `f` in the queue pane (`↑↓`/`j`/`k`, `PgUp`/`PgDn`, `g`/`G` scroll, `Enter` copies, `Esc` closes)
+- Added a scrollable full-text preview for the selected prompt, opened with `f` in the queue pane (`↑↓`/`j`/`k`, `PgUp`/`PgDn`, `g`/`G` and the mouse wheel scroll, `Enter` copies, `Esc` closes)
+- Added searchable prompt history that keeps every prompt ever added, including popped prompts and prompts from closed tabs, capped at the 500 most recent entries and 256 KiB of prompt text
+- Added ways to forget remembered prompts: `^d` on the selected entry in the TUI history search, `q history --forget <text>` to drop everything matching a term, and `q history --clear` to forget all of it
+- Added a TUI history search opened with `Cmd+/` from either pane or `/` in the queue pane, with click-to-open results, wheel scrolling, a fullscreen view of the selected entry, and `Enter` to copy and return to the queue
+- Added the `q history [search] [--json]` command for searching prompt history from the CLI
+- Added language-agnostic prompt search that transliterates both the query and the stored text to ASCII, so a Latin query finds Cyrillic text (`uluchshit` matches `улучшить`), accents are ignored (`cafe` matches `café`), both the `ia` and `ya` transliteration conventions match, and composed (NFC) and decomposed (NFD) text compare equal
+- Added `←`/`→` tab switching in the queue pane, alongside the existing `[` and `]` shortcuts
 
 ## [0.1.0] - 2026-08-10
 
