@@ -22,6 +22,9 @@ All notable changes to this project will be documented in this file.
 - Added language-agnostic prompt search that transliterates both the query and the stored text to ASCII, so a Latin query finds Cyrillic text (`uluchshit` matches `улучшить`), accents are ignored (`cafe` matches `café`), both the `ia` and `ya` transliteration conventions match, and composed (NFC) and decomposed (NFD) text compare equal
 - Added `←`/`→` tab switching in the queue pane, alongside the existing `[` and `]` shortcuts
 
+### Fixed
+- Fixed uppercase letters entered with Shift in the TUI composer, including non-Latin keyboard layouts
+
 ## [0.1.0] - 2026-08-10
 
 ### Changed

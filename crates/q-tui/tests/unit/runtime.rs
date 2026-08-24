@@ -508,10 +508,29 @@ fn printable_chars_require_no_command_modifiers() {
 }
 
 #[test]
-fn keyboard_mode_reports_modifiers_for_backspace() {
+fn shifted_letters_are_uppercase_in_composer() {
+    assert_eq!(
+        map_key(
+            with_mods(KeyCode::Char('a'), KeyModifiers::SHIFT),
+            Pane::Composer
+        ),
+        Some(Input::Char('A'))
+    );
+    assert_eq!(
+        map_key(
+            with_mods(KeyCode::Char('ф'), KeyModifiers::SHIFT),
+            Pane::Composer
+        ),
+        Some(Input::Char('Ф'))
+    );
+}
+
+#[test]
+fn keyboard_mode_reports_modifiers_and_layout_aware_shifted_keys() {
     assert!(
         KEYBOARD_ENHANCEMENTS.contains(KeyboardEnhancementFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES)
     );
+    assert!(KEYBOARD_ENHANCEMENTS.contains(KeyboardEnhancementFlags::REPORT_ALTERNATE_KEYS));
 }
 
 #[test]

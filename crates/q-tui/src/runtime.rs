@@ -26,7 +26,8 @@ const SYNC_INTERVAL: Duration = Duration::from_millis(250);
 const FULL_RELOAD_INTERVAL: Duration = Duration::from_secs(2);
 const KEYBOARD_ENHANCEMENTS: KeyboardEnhancementFlags =
     KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
-        .union(KeyboardEnhancementFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES);
+        .union(KeyboardEnhancementFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES)
+        .union(KeyboardEnhancementFlags::REPORT_ALTERNATE_KEYS);
 
 pub fn run(queue_path: &Path) -> Result<()> {
     let queue = q_core::storage::load(queue_path)?;
@@ -354,6 +355,14 @@ fn map_preview_key(key: KeyEvent) -> Option<Input> {
     }
 }
 
+fn shifted_char(c: char) -> char {
+    let mut uppercase = c.to_uppercase();
+    match (uppercase.next(), uppercase.next()) {
+        (Some(c), None) => c,
+        _ => c,
+    }
+}
+
 fn map_key(key: KeyEvent, focus: Pane, dialog_open: bool) -> Option<Input> {
     let modifiers = key.modifiers;
     let shift = modifiers.contains(KeyModifiers::SHIFT);
@@ -433,7 +442,9 @@ fn map_key(key: KeyEvent, focus: Pane, dialog_open: bool) -> Option<Input> {
             KeyCode::Char('z') if (ctrl || super_key) && shift => Some(Input::Redo),
             KeyCode::Char('z') if ctrl || super_key => Some(Input::Undo),
             KeyCode::Char('y') if ctrl => Some(Input::Redo),
-            KeyCode::Char(c) if !ctrl && !alt && !super_key => Some(Input::Char(c)),
+            KeyCode::Char(c) if !ctrl && !alt && !super_key => {
+                Some(Input::Char(if shift { shifted_char(c) } else { c }))
+            }
             _ => None,
         },
     }
