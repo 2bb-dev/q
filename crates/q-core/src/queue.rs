@@ -55,6 +55,10 @@ impl Queue {
         self.prompts.iter().find(|p| p.id == id)
     }
 
+    pub(crate) fn get_mut(&mut self, id: PromptId) -> Option<&mut Prompt> {
+        self.prompts.iter_mut().find(|p| p.id == id)
+    }
+
     pub fn remove(&mut self, id: PromptId) -> Result<Prompt> {
         let pos = self
             .prompts

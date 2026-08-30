@@ -528,6 +528,8 @@ pub struct App {
     pub search: Option<SearchDialog>,
     pub menu: Option<MenuState>,
     pub github: GithubAuthState,
+    /// GitHub login used for attribution on new prompts, tabs, and edits.
+    pub identity: Option<String>,
     pub editor: Option<FullScreenEditor>,
     pub status: String,
     pub(crate) tab_hits: Vec<TabHit>,
@@ -563,6 +565,7 @@ impl App {
             search: None,
             menu: None,
             github: GithubAuthState::Unknown,
+            identity: None,
             editor: None,
             status: String::new(),
             tab_hits: Vec::new(),

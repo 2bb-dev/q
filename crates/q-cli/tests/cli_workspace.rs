@@ -215,3 +215,43 @@ fn list_json_includes_ids_names_and_active_flag() {
         .any(|entry| entry["name"] == "Personal" && entry["active"] == false));
     assert!(entries.iter().all(|entry| entry["id"].is_string()));
 }
+
+#[test]
+fn add_records_the_cached_github_login_and_lists_it_in_json() {
+    let dir = TempDir::new().unwrap();
+    std::fs::create_dir_all(dir.path()).unwrap();
+    std::fs::write(dir.path().join("github_user"), "octocat\n").unwrap();
+
+    q(&dir)
+        .args(["add", "attributed", "--tab", "1"])
+        .assert()
+        .success();
+    let output = q(&dir)
+        .args(["list", "--tab", "1", "--json"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let parsed: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(parsed[0]["created_by"], "octocat");
+}
+
+#[test]
+fn add_without_identity_emits_no_author_fields() {
+    let dir = TempDir::new().unwrap();
+    q(&dir)
+        .args(["add", "anonymous", "--tab", "1"])
+        .assert()
+        .success();
+    let output = q(&dir)
+        .args(["list", "--tab", "1", "--json"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let parsed: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    assert!(parsed[0].get("created_by").is_none());
+    assert!(parsed[0].get("updated_by").is_none());
+}

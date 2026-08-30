@@ -498,3 +498,33 @@ fn typed_source_identity_distinguishes_inline_text_from_an_external_path() {
     let external = PromptSource::external_markdown(path).unwrap();
     assert_ne!(inline, external);
 }
+
+#[test]
+fn author_fields_survive_the_directory_roundtrip() {
+    let root = TempDir::new().unwrap();
+    let dir = init_dir(root.path(), "Personal").unwrap();
+    let mut workspace = Workspace::new();
+    let tab = workspace
+        .create_tab_with(
+            crate::TabId::new(),
+            "team",
+            Utc::now(),
+            Some("octocat".to_string()),
+        )
+        .unwrap();
+    let mut prompt = Prompt::new("attributed").unwrap();
+    prompt.created_by = Some("octocat".to_string());
+    let id = workspace.add_prompt(tab, prompt).unwrap();
+    workspace
+        .edit_prompt_inline(id, "attributed v2", Some("hubber".to_string()))
+        .unwrap();
+
+    save_dir(&dir, &workspace).unwrap();
+    let loaded = load_dir(&dir).unwrap();
+
+    assert_eq!(loaded.tab(tab).unwrap().created_by(), Some("octocat"));
+    let prompt = loaded.get_prompt(id).unwrap();
+    assert_eq!(prompt.created_by.as_deref(), Some("octocat"));
+    assert_eq!(prompt.updated_by.as_deref(), Some("hubber"));
+    assert!(prompt.updated_at.is_some());
+}

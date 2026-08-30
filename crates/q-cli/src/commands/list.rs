@@ -13,6 +13,12 @@ struct PromptOutput<'a> {
     available: bool,
     pinned: bool,
     created_at: DateTime<Utc>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    created_by: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    updated_at: Option<DateTime<Utc>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    updated_by: Option<&'a str>,
 }
 
 impl<'a> PromptOutput<'a> {
@@ -25,6 +31,9 @@ impl<'a> PromptOutput<'a> {
             available: resolved.available,
             pinned: prompt.pinned(),
             created_at: prompt.created_at,
+            created_by: prompt.created_by.as_deref(),
+            updated_at: prompt.updated_at,
+            updated_by: prompt.updated_by.as_deref(),
         }
     }
 }

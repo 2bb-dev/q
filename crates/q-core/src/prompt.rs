@@ -122,6 +122,16 @@ pub struct Prompt {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pinned_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
+    /// GitHub login of whoever added the prompt, when an identity was
+    /// connected at the time.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created_by: Option<String>,
+    /// When the prompt text was last edited.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub updated_at: Option<DateTime<Utc>>,
+    /// GitHub login of the last editor, when an identity was connected.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub updated_by: Option<String>,
 }
 
 impl Prompt {
@@ -142,6 +152,9 @@ impl Prompt {
             source,
             pinned_at: None,
             created_at: Utc::now(),
+            created_by: None,
+            updated_at: None,
+            updated_by: None,
         })
     }
 

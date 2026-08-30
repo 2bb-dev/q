@@ -18,6 +18,7 @@ All notable changes to this project will be documented in this file.
 - Removed the dormant image attachment support, including image storage, the images directory, and image-clipboard code ([#5](https://github.com/2bb-dev/q/issues/5))
 
 ### Added
+- Added author attribution: with a connected GitHub identity, new prompts and tabs record `created_by` and prompt edits record `updated_at`/`updated_by`, visible in `q list --json`; without an identity nothing is recorded ([#10](https://github.com/2bb-dev/q/issues/10))
 - Added GitHub sign-in under Settings → GitHub: reuses an existing `gh` CLI login automatically, or runs the OAuth device flow in-app (requires the `QCLI_GITHUB_CLIENT_ID` environment variable) storing the token in a `0600` file; shows the connected login and supports disconnect ([#9](https://github.com/2bb-dev/q/issues/9))
 - Added a TUI menu overlay opened with `Cmd+I` (or `w` in the queue pane): Workspaces lists workspaces with the current one marked, switches on Enter, creates with `n`, and opens a per-workspace info dialog with `i` for rename and confirmed delete; Settings is a placeholder shell; `Esc` walks back one level at a time ([#8](https://github.com/2bb-dev/q/issues/8))
 - Added multiple workspaces: `q workspace list|create|rename|delete|switch` manages them, `state.json` remembers the active one, and `--workspace <name>` targets any workspace for a single command ([#7](https://github.com/2bb-dev/q/issues/7))
