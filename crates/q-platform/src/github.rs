@@ -324,6 +324,92 @@ pub fn accept_repo_invitation(token: &str, id: u64) -> Result<(), GithubError> {
     Ok(())
 }
 
+#[derive(Debug, Deserialize)]
+struct CollaboratorResponse {
+    login: String,
+}
+
+/// Logins of the repository's collaborators.
+pub fn list_collaborators(token: &str, full_name: &str) -> Result<Vec<String>, GithubError> {
+    let response = ureq::get(&format!(
+        "https://api.github.com/repos/{full_name}/collaborators"
+    ))
+    .set("Accept", "application/vnd.github+json")
+    .set("Authorization", &format!("Bearer {token}"))
+    .set("User-Agent", USER_AGENT)
+    .call()?;
+    let collaborators: Vec<CollaboratorResponse> = response.into_json()?;
+    Ok(collaborators
+        .into_iter()
+        .map(|collaborator| collaborator.login)
+        .collect())
+}
+
+#[derive(Debug, Deserialize)]
+struct RepoInvitationResponse {
+    invitee: Option<InvitationInviter>,
+}
+
+/// Logins with a pending invitation to the repository.
+pub fn list_pending_collaborators(
+    token: &str,
+    full_name: &str,
+) -> Result<Vec<String>, GithubError> {
+    let response = ureq::get(&format!(
+        "https://api.github.com/repos/{full_name}/invitations"
+    ))
+    .set("Accept", "application/vnd.github+json")
+    .set("Authorization", &format!("Bearer {token}"))
+    .set("User-Agent", USER_AGENT)
+    .call()?;
+    let invitations: Vec<RepoInvitationResponse> = response.into_json()?;
+    Ok(invitations
+        .into_iter()
+        .filter_map(|invitation| invitation.invitee.map(|invitee| invitee.login))
+        .collect())
+}
+
+/// Invites a GitHub user as a collaborator on the repository.
+pub fn invite_collaborator(
+    token: &str,
+    full_name: &str,
+    username: &str,
+) -> Result<(), GithubError> {
+    ureq::request(
+        "PUT",
+        &format!("https://api.github.com/repos/{full_name}/collaborators/{username}"),
+    )
+    .set("Accept", "application/vnd.github+json")
+    .set("Authorization", &format!("Bearer {token}"))
+    .set("User-Agent", USER_AGENT)
+    .call()?;
+    Ok(())
+}
+
+/// Deletes the repository. Requires admin rights; GitHub rejects the call
+/// otherwise.
+pub fn delete_repo(token: &str, full_name: &str) -> Result<(), GithubError> {
+    ureq::request(
+        "DELETE",
+        &format!("https://api.github.com/repos/{full_name}"),
+    )
+    .set("Accept", "application/vnd.github+json")
+    .set("Authorization", &format!("Bearer {token}"))
+    .set("User-Agent", USER_AGENT)
+    .call()?;
+    Ok(())
+}
+
+/// Extracts `owner/repo` from a GitHub clone URL.
+pub fn full_name_from_url(url: &str) -> Option<String> {
+    let trimmed = url.strip_suffix(".git").unwrap_or(url);
+    let rest = trimmed
+        .strip_prefix("https://github.com/")
+        .or_else(|| trimmed.strip_prefix("git@github.com:"))?;
+    let (owner, repo) = rest.split_once('/')?;
+    (!owner.is_empty() && !repo.is_empty()).then(|| format!("{owner}/{repo}"))
+}
+
 /// Logins of the organizations the token's user belongs to.
 pub fn list_org_logins(token: &str) -> Result<Vec<String>, GithubError> {
     let response = ureq::get("https://api.github.com/user/orgs")

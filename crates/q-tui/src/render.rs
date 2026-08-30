@@ -415,7 +415,20 @@ fn render_preview(frame: &mut Frame, app: &mut App, preview_area: Rect) {
     if preview_area.width < 8 || preview_area.height < 3 {
         return;
     }
-    let block = Block::default()
+    // Team workspaces show who added the prompt and when it changed.
+    let metadata = if app.is_team {
+        app.preview_prompt().map(|prompt| {
+            let author = prompt.created_by.as_deref().unwrap_or("unknown");
+            let updated = prompt
+                .updated_at
+                .map(|stamp| format!(" \u{b7} updated {}", relative_time(stamp)))
+                .unwrap_or_default();
+            format!(" added by {author}{updated} ")
+        })
+    } else {
+        None
+    };
+    let mut block = Block::default()
         .title(format!(" {} ", app.preview_title()))
         .title_bottom(Line::styled(
             " ↑↓ scroll · Enter copy · e edit · Esc close ",
@@ -423,6 +436,9 @@ fn render_preview(frame: &mut Frame, app: &mut App, preview_area: Rect) {
         ))
         .borders(Borders::ALL)
         .border_style(Style::default().fg(ACCENT));
+    if let Some(metadata) = metadata {
+        block = block.title_top(Line::styled(metadata, dim()).right_aligned());
+    }
     let inner = block.inner(preview_area);
     frame.render_widget(Clear, preview_area);
     frame.render_widget(block, preview_area);
@@ -972,15 +988,36 @@ fn render_workspace_info(
         return;
     };
     let area = frame.area();
-    let width = area.width.saturating_sub(6).clamp(12, 44);
+    let width = area.width.saturating_sub(6).clamp(12, 48);
     let mut lines = vec![
         Line::from(vec![Span::styled("Name: ", dim()), Span::raw(&entry.name)]),
         Line::from(vec![
             Span::styled("Kind: ", dim()),
             Span::raw(if entry.team { "team" } else { "personal" }),
         ]),
-        Line::raw(""),
     ];
+    if entry.team {
+        match &info.details {
+            Some(details) => {
+                lines.push(Line::from(vec![
+                    Span::styled("Repo: ", dim()),
+                    Span::raw(details.repo.clone()),
+                ]));
+                lines.push(Line::from(vec![
+                    Span::styled("Members: ", dim()),
+                    Span::raw(details.members.join(", ")),
+                ]));
+                if !details.pending.is_empty() {
+                    lines.push(Line::from(vec![
+                        Span::styled("Invited: ", dim()),
+                        Span::raw(details.pending.join(", ")),
+                    ]));
+                }
+            }
+            None => lines.push(Line::styled("Loading team details...", dim())),
+        }
+    }
+    lines.push(Line::raw(""));
     match &info.mode {
         InfoMode::View => {
             for action in InfoAction::available(entry.team) {
@@ -988,6 +1025,9 @@ fn render_workspace_info(
                     InfoAction::Rename => " Rename",
                     InfoAction::ConvertToTeam => " Make team workspace",
                     InfoAction::Delete => " Delete",
+                    InfoAction::Invite => " Invite",
+                    InfoAction::Leave => " Leave",
+                    InfoAction::DeleteRepo => " Delete repo",
                 };
                 let style = if info.action == *action {
                     Style::default().add_modifier(Modifier::REVERSED)
@@ -1042,6 +1082,35 @@ fn render_workspace_info(
             ));
             lines.push(Line::styled("Enter delete \u{b7} Esc cancel", dim()));
         }
+        InfoMode::Invite { value } => {
+            lines.push(Line::from(vec![
+                Span::styled("GitHub username: ", dim()),
+                Span::raw(value.clone()),
+                Span::styled(
+                    if cursor_on { "\u{2588}" } else { " " },
+                    Style::default().fg(ACCENT),
+                ),
+            ]));
+            lines.push(Line::styled("Enter invite \u{b7} Esc cancel", dim()));
+        }
+        InfoMode::ConfirmLeave => {
+            lines.push(Line::styled(
+                format!("Leave '{}'? Removes it from this machine only.", entry.name),
+                Style::default().fg(Color::Red),
+            ));
+            lines.push(Line::styled("Enter leave \u{b7} Esc cancel", dim()));
+        }
+        InfoMode::ConfirmDeleteRepo => {
+            lines.push(Line::styled(
+                "Delete the shared GitHub repository for the WHOLE TEAM?",
+                Style::default().fg(Color::Red),
+            ));
+            lines.push(Line::styled(
+                "This cannot be undone. Owner only.",
+                Style::default().fg(Color::Red),
+            ));
+            lines.push(Line::styled("Enter delete repo \u{b7} Esc cancel", dim()));
+        }
     }
     let height = ((lines.len() as u16) + 2).min(area.height);
     let dialog_area = centered_rect(width, height, area);
@@ -1066,6 +1135,21 @@ fn centered_rect(width: u16, height: u16, area: Rect) -> Rect {
 
 fn dim() -> Style {
     Style::default().fg(MUTED)
+}
+
+/// Coarse relative time for metadata lines: "3m ago", "5h ago", "2d ago".
+fn relative_time(stamp: chrono::DateTime<chrono::Utc>) -> String {
+    let elapsed = chrono::Utc::now().signed_duration_since(stamp);
+    let minutes = elapsed.num_minutes();
+    if minutes < 1 {
+        "just now".to_string()
+    } else if minutes < 60 {
+        format!("{minutes}m ago")
+    } else if minutes < 60 * 24 {
+        format!("{}h ago", elapsed.num_hours())
+    } else {
+        format!("{}d ago", elapsed.num_days())
+    }
 }
 
 #[cfg(test)]

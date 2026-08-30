@@ -53,3 +53,21 @@ fn device_authorization_defaults_the_poll_interval() {
     .unwrap();
     assert_eq!(parsed.poll_interval(), std::time::Duration::from_secs(5));
 }
+
+#[test]
+fn full_name_is_extracted_from_github_clone_urls() {
+    assert_eq!(
+        full_name_from_url("https://github.com/2bb-dev/q-ws-crew.git"),
+        Some("2bb-dev/q-ws-crew".to_string())
+    );
+    assert_eq!(
+        full_name_from_url("git@github.com:2bb-dev/q-ws-crew.git"),
+        Some("2bb-dev/q-ws-crew".to_string())
+    );
+    assert_eq!(
+        full_name_from_url("https://github.com/2bb-dev/q-ws-crew"),
+        Some("2bb-dev/q-ws-crew".to_string())
+    );
+    assert_eq!(full_name_from_url("https://example.com/x/y.git"), None);
+    assert_eq!(full_name_from_url("/tmp/local/origin"), None);
+}
