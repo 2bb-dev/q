@@ -20,7 +20,7 @@ All notable changes to this project will be documented in this file.
 - Removed the dormant image attachment support, including image storage, the images directory, and image-clipboard code ([#5](https://github.com/2bb-dev/q/issues/5))
 
 ### Added
-- Added npm distribution: `npm install -g q-cli` installs the `q` binary via prebuilt platform packages
+- Added npm distribution: `npm install -g @2bb-dev/q` installs the `q` binary via prebuilt platform packages
 - Added team management to the workspace info dialog: repo, member list, and pending invites from GitHub, invite by username, leave (local removal), and delete repo (owner only, separate strong confirmation); the prompt preview in team workspaces shows who added the prompt and when it was last updated ([#14](https://github.com/2bb-dev/q/issues/14))
 - Added the join flow: `c` in the Workspaces overlay lists pending GitHub repository invitations (acceptable in-app with Enter) and accessible `q-workspace` repos not yet connected, and clones the selected repo into a new local team workspace ([#13](https://github.com/2bb-dev/q/issues/13))
 - Added background sync for team workspaces: the TUI fetches and merges every ~20 seconds and pushes local changes debounced; CLI commands pull before and push after; per-prompt files merge cleanly, same-prompt conflicts resolve to the newer `updated_at` and deletions win; the Workspaces overlay shows git-style sync colors (green synced, yellow pending, red error) and offline work degrades to a warning ([#12](https://github.com/2bb-dev/q/issues/12))

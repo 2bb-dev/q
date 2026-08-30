@@ -25,7 +25,7 @@ try {
 } catch {
   console.error(`q: platform package ${pkg} is not installed.`);
   console.error(
-    "Reinstall q-cli without --no-optional so npm can fetch the binary.",
+    "Reinstall @2bb-dev/q without --no-optional so npm can fetch the binary.",
   );
   process.exit(1);
 }

@@ -31,7 +31,7 @@
 With npm:
 
 ```bash
-npm install -g q-cli
+npm install -g @2bb-dev/q
 ```
 
 Or run the installer on macOS, Linux, or Git Bash on Windows:

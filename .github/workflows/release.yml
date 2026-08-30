@@ -133,6 +133,12 @@ jobs:
       - name: Publish platform packages
         run: |
           for pkg in npm-dist/q-cli-*; do
+            name=$(node -p "require('./$pkg/package.json').name")
+            version=$(node -p "require('./$pkg/package.json').version")
+            if npm view "$name@$version" version >/dev/null 2>&1; then
+              echo "skipping $name@$version: already published"
+              continue
+            fi
             npm publish "./$pkg" --provenance --access public
           done
         env:

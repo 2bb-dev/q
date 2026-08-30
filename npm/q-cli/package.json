@@ -1,5 +1,5 @@
 {
-  "name": "q-cli",
+  "name": "@2bb-dev/q",
   "version": "0.0.0",
   "description": "A native terminal queue for prompts, tasks, and text snippets",
   "license": "MIT",
