@@ -32,6 +32,11 @@ pub fn queue_path() -> std::io::Result<PathBuf> {
     Ok(app_dir()?.join("queue.json"))
 }
 
+/// Path to the persisted app state JSON (active workspace pointer).
+pub fn state_path() -> std::io::Result<PathBuf> {
+    Ok(app_dir()?.join("state.json"))
+}
+
 /// Directory containing one subdirectory per workspace.
 pub fn workspaces_dir() -> std::io::Result<PathBuf> {
     let dir = app_dir()?.join("workspaces");

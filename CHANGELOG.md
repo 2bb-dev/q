@@ -18,6 +18,7 @@ All notable changes to this project will be documented in this file.
 - Removed the dormant image attachment support, including image storage, the images directory, and image-clipboard code ([#5](https://github.com/2bb-dev/q/issues/5))
 
 ### Added
+- Added multiple workspaces: `q workspace list|create|rename|delete|switch` manages them, `state.json` remembers the active one, and `--workspace <name>` targets any workspace for a single command ([#7](https://github.com/2bb-dev/q/issues/7))
 - Added live `.md` and `.markdown` references through `q add --tab <name> <path>`, including current-content copy, pop, preview, history search, availability-aware JSON, and `--text` for literal Markdown-looking input
 - Added a built-in full-screen editor for inline prompts and referenced Markdown files, with identity-preserving inline edits, format-preserving atomic file saves, external-change conflict detection, and safe unsaved-buffer handling
 - Added `q remove <ID>` and confirmed TUI deletion to discard queue records without copying or deleting referenced files

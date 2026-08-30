@@ -6,6 +6,9 @@ use clap::{Parser, Subcommand};
 #[derive(Parser)]
 #[command(name = "q", version, about = "Terminal prompt queue")]
 struct Cli {
+    /// Act on the named workspace instead of the active one.
+    #[arg(long, global = true, value_name = "NAME")]
+    workspace: Option<String>,
     #[command(subcommand)]
     command: Option<Command>,
 }
@@ -79,40 +82,78 @@ enum Command {
     Unpin { id: String },
     /// Launch the TUI.
     Tui,
+    /// Manage workspaces.
+    Workspace {
+        #[command(subcommand)]
+        action: WorkspaceAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum WorkspaceAction {
+    /// List workspaces. The active one is marked with *.
+    List {
+        /// Emit JSON instead of human-readable output.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Create a new workspace and switch to it.
+    Create { name: String },
+    /// Rename a workspace.
+    Rename { name: String, new_name: String },
+    /// Delete a workspace and all its prompts.
+    Delete {
+        name: String,
+        /// Skip the confirmation prompt.
+        #[arg(long)]
+        yes: bool,
+    },
+    /// Switch the active workspace.
+    Switch { name: String },
 }
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
+    let ws = cli.workspace.as_deref();
     match cli.command {
         Some(Command::Add {
             text,
             literal,
             pin,
             tab,
-        }) => commands::add::run(text, literal, pin, &tab),
-        Some(Command::List { json, tab }) => commands::list::run(json, tab),
+        }) => commands::add::run(text, literal, pin, &tab, ws),
+        Some(Command::List { json, tab }) => commands::list::run(json, tab, ws),
         Some(Command::History {
             search,
             json,
             clear,
             forget,
-        }) => commands::history::run(json, search, clear, forget),
+        }) => commands::history::run(json, search, clear, forget, ws),
         Some(Command::Copy {
             id,
             next,
             stdout,
             tab,
-        }) => commands::copy::run(id, next, stdout, tab),
+        }) => commands::copy::run(id, next, stdout, tab, ws),
         Some(Command::Pop {
             id,
             next,
             stdout,
             tab,
-        }) => commands::pop::run(id, next, stdout, tab),
-        Some(Command::Remove { id }) => commands::remove::run(&id),
-        Some(Command::Pin { id }) => commands::pin::run(&id, true),
-        Some(Command::Unpin { id }) => commands::pin::run(&id, false),
-        Some(Command::Tui) | None => commands::tui::run(),
+        }) => commands::pop::run(id, next, stdout, tab, ws),
+        Some(Command::Remove { id }) => commands::remove::run(&id, ws),
+        Some(Command::Pin { id }) => commands::pin::run(&id, true, ws),
+        Some(Command::Unpin { id }) => commands::pin::run(&id, false, ws),
+        Some(Command::Tui) | None => commands::tui::run(ws),
+        Some(Command::Workspace { action }) => match action {
+            WorkspaceAction::List { json } => commands::workspace::list(json),
+            WorkspaceAction::Create { name } => commands::workspace::create(&name),
+            WorkspaceAction::Rename { name, new_name } => {
+                commands::workspace::rename(&name, &new_name)
+            }
+            WorkspaceAction::Delete { name, yes } => commands::workspace::delete(&name, yes),
+            WorkspaceAction::Switch { name } => commands::workspace::switch(&name),
+        },
     }
 }
 

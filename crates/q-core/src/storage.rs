@@ -69,6 +69,61 @@ struct HistoryFile {
     entries: Vec<HistoryEntry>,
 }
 
+/// Identity of a workspace directory, read from its `workspace.json`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorkspaceMeta {
+    pub id: Uuid,
+    pub name: String,
+}
+
+/// Reads a workspace directory's metadata.
+pub fn read_meta(dir: &Path) -> Result<WorkspaceMeta> {
+    let meta: WorkspaceMetaFile = read_json(&dir.join(WORKSPACE_FILE))?;
+    if meta.schema != DIR_SCHEMA_VERSION {
+        return Err(CoreError::UnsupportedSchema(meta.schema));
+    }
+    Ok(WorkspaceMeta {
+        id: meta.id,
+        name: meta.name,
+    })
+}
+
+/// Renames a workspace, preserving its id.
+pub fn rename_dir(dir: &Path, new_name: &str) -> Result<()> {
+    let meta = read_meta(dir)?;
+    write_json(
+        &dir.join(WORKSPACE_FILE),
+        &WorkspaceMetaFile {
+            schema: DIR_SCHEMA_VERSION,
+            id: meta.id,
+            name: new_name.to_string(),
+        },
+    )
+}
+
+/// Lists the workspace directories under `root`, sorted by name then id.
+pub fn list_dirs(root: &Path) -> Result<Vec<(PathBuf, WorkspaceMeta)>> {
+    let mut workspaces = Vec::new();
+    if !root.exists() {
+        return Ok(workspaces);
+    }
+    for entry in fs::read_dir(root)? {
+        let path = entry?.path();
+        if path.is_dir() && path.join(WORKSPACE_FILE).exists() {
+            let meta = read_meta(&path)?;
+            workspaces.push((path, meta));
+        }
+    }
+    workspaces.sort_by(|left, right| {
+        left.1
+            .name
+            .to_lowercase()
+            .cmp(&right.1.name.to_lowercase())
+            .then_with(|| left.1.id.cmp(&right.1.id))
+    });
+    Ok(workspaces)
+}
+
 /// Creates a new empty workspace directory named `name` under `parent`.
 /// The directory is named after the workspace's fresh id and returned.
 pub fn init_dir(parent: &Path, name: &str) -> Result<PathBuf> {

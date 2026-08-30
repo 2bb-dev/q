@@ -5,11 +5,17 @@ use q_platform::clipboard::{Clipboard, SystemClipboard};
 
 use super::{source, with_workspace};
 
-pub fn run(id: Option<String>, next: bool, stdout: bool, tab: Option<String>) -> Result<()> {
+pub fn run(
+    id: Option<String>,
+    next: bool,
+    stdout: bool,
+    tab: Option<String>,
+    workspace: Option<&str>,
+) -> Result<()> {
     if id.is_none() && !next {
         return Err(anyhow!("specify a prompt id or --next"));
     }
-    let prompt = with_workspace(|workspace| {
+    let prompt = with_workspace(workspace, |workspace| {
         if let Some(id) = id {
             let resolved = workspace.resolve_prompt(&id)?;
             workspace

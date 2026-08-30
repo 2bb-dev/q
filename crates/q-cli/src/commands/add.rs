@@ -7,7 +7,13 @@ use q_platform::external_document::{absolute_path, read_utf8};
 
 use super::with_workspace_mut;
 
-pub fn run(text: Option<String>, literal: bool, pin: bool, tab: &str) -> Result<()> {
+pub fn run(
+    text: Option<String>,
+    literal: bool,
+    pin: bool,
+    tab: &str,
+    workspace: Option<&str>,
+) -> Result<()> {
     let mut prompt = match text {
         Some(text) if !literal && is_markdown_path(&text) => {
             let path = absolute_path(Path::new(&text))?;
@@ -23,7 +29,7 @@ pub fn run(text: Option<String>, literal: bool, pin: bool, tab: &str) -> Result<
     };
     prompt.set_pinned(pin);
 
-    let id = with_workspace_mut(|workspace| {
+    let id = with_workspace_mut(workspace, |workspace| {
         let tab_id = workspace.resolve_tab(tab)?;
         Ok(workspace.add_prompt(tab_id, prompt)?)
     })?;

@@ -230,6 +230,33 @@ fn pinned_at_is_persisted_and_unpinned_prompts_omit_it() {
     assert!(!plain_json.contains("pinned_at"));
 }
 
+#[test]
+fn read_meta_and_rename_preserve_the_workspace_id() {
+    let root = TempDir::new().unwrap();
+    let dir = init_dir(root.path(), "before").unwrap();
+    let meta = read_meta(&dir).unwrap();
+    assert_eq!(meta.name, "before");
+
+    rename_dir(&dir, "after").unwrap();
+    let renamed = read_meta(&dir).unwrap();
+    assert_eq!(renamed.name, "after");
+    assert_eq!(renamed.id, meta.id);
+}
+
+#[test]
+fn list_dirs_returns_workspaces_sorted_by_name() {
+    let root = TempDir::new().unwrap();
+    init_dir(root.path(), "zeta").unwrap();
+    init_dir(root.path(), "Alpha").unwrap();
+    fs::create_dir_all(root.path().join("not-a-workspace")).unwrap();
+
+    let listed = list_dirs(root.path()).unwrap();
+    let names: Vec<_> = listed.iter().map(|(_, meta)| meta.name.as_str()).collect();
+    assert_eq!(names, vec!["Alpha", "zeta"]);
+
+    assert!(list_dirs(&root.path().join("absent")).unwrap().is_empty());
+}
+
 fn count_json(dir: &Path) -> usize {
     fs::read_dir(dir)
         .unwrap()
