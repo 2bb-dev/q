@@ -1,5 +1,6 @@
 use crate::app::{
-    App, EditorOrigin, Effect, GithubAuthState, MenuState, QueueMutation, WorkspaceEntry,
+    App, EditorOrigin, Effect, GithubAuthState, InfoMode, MenuState, QueueMutation, WorkspaceEntry,
+    WorkspacesMode,
 };
 use crate::reducer::reduce;
 use crate::render::draw;
@@ -58,23 +59,12 @@ fn event_loop(
     let start = Instant::now();
     let mut workspace_dir = workspace_dir.to_path_buf();
     let mut sync = QueueSync::new(&workspace_dir);
-    let (github_tx, github_rx): (Sender<GithubAuthState>, Receiver<GithubAuthState>) =
+    let (github_tx, github_rx): (Sender<RuntimeEvent>, Receiver<RuntimeEvent>) =
         std::sync::mpsc::channel();
     loop {
         sync.refresh_if_due(app, &workspace_dir);
-        while let Ok(state) = github_rx.try_recv() {
-            match &state {
-                GithubAuthState::Connected { login, .. } => {
-                    app.identity = Some(login.clone());
-                    let _ = q_platform::github::store_cached_login(login);
-                }
-                GithubAuthState::NotConnected => {
-                    app.identity = None;
-                    let _ = q_platform::github::clear_cached_login();
-                }
-                _ => {}
-            }
-            app.github = state;
+        while let Ok(event) = github_rx.try_recv() {
+            apply_runtime_event(app, event, &workspace_dir);
         }
 
         let cursor_on = cursor_is_on(start.elapsed());
@@ -388,13 +378,83 @@ fn save_external_editor(app: &mut App, _workspace_dir: &Path) -> bool {
     }
 }
 
+/// Messages sent by background threads (GitHub auth, team conversion).
+#[derive(Debug)]
+enum RuntimeEvent {
+    Github(GithubAuthState),
+    /// Possible repo owners for a team conversion; `None` = the user.
+    Owners(std::result::Result<Vec<Option<String>>, String>),
+    /// Team conversion finished for the workspace at `dir`.
+    Converted {
+        result: std::result::Result<String, String>,
+    },
+}
+
+fn apply_runtime_event(app: &mut App, event: RuntimeEvent, workspace_dir: &Path) {
+    match event {
+        RuntimeEvent::Github(state) => {
+            match &state {
+                GithubAuthState::Connected { login, .. } => {
+                    app.identity = Some(login.clone());
+                    let _ = q_platform::github::store_cached_login(login);
+                }
+                GithubAuthState::NotConnected => {
+                    app.identity = None;
+                    let _ = q_platform::github::clear_cached_login();
+                }
+                _ => {}
+            }
+            app.github = state;
+        }
+        RuntimeEvent::Owners(result) => {
+            let Some(MenuState::Workspaces(overlay)) = app.menu.as_mut() else {
+                return;
+            };
+            let WorkspacesMode::Info(info) = &mut overlay.mode else {
+                return;
+            };
+            if !matches!(info.mode, InfoMode::LoadingOwners) {
+                return;
+            }
+            match result {
+                Ok(owners) => {
+                    info.mode = InfoMode::SelectOwner {
+                        owners,
+                        selected: 0,
+                    };
+                }
+                Err(error) => {
+                    info.mode = InfoMode::View;
+                    overlay.error = error;
+                }
+            }
+        }
+        RuntimeEvent::Converted { result } => match result {
+            Ok(full_name) => {
+                if let Ok(entries) = workspace_entries(workspace_dir) {
+                    app.open_workspaces(entries);
+                }
+                app.status = format!("team workspace pushed to {full_name}");
+            }
+            Err(error) => {
+                if let Some(MenuState::Workspaces(overlay)) = app.menu.as_mut() {
+                    if let WorkspacesMode::Info(info) = &mut overlay.mode {
+                        info.mode = InfoMode::View;
+                    }
+                    overlay.error = error;
+                }
+            }
+        },
+    }
+}
+
 fn handle_event(
     event: Event,
     app: &mut App,
     clipboard: &mut dyn Clipboard,
     workspace_dir: &mut PathBuf,
     sync: &mut QueueSync,
-    github_tx: &Sender<GithubAuthState>,
+    github_tx: &Sender<RuntimeEvent>,
 ) -> Result<bool> {
     let input = match event {
         Event::Key(key)
@@ -512,13 +572,17 @@ fn handle_event(
         Some(
             effect @ (Effect::OpenWorkspacesOverlay
             | Effect::SwitchWorkspace(_)
-            | Effect::CreateWorkspace(_)
+            | Effect::CreateWorkspace { .. }
             | Effect::RenameWorkspace { .. }
             | Effect::DeleteWorkspace(_)),
         ) => {
-            if let Err(error) = handle_menu_effect(app, &effect, workspace_dir, sync) {
+            if let Err(error) = handle_menu_effect(app, &effect, workspace_dir, sync, github_tx) {
                 app.status = format!("workspace operation failed: {error}");
             }
+        }
+        Some(Effect::FetchRepoOwners) => spawn_fetch_owners(github_tx.clone()),
+        Some(Effect::ConvertToTeam { dir, org }) => {
+            spawn_convert_to_team(github_tx.clone(), dir, org);
         }
         Some(Effect::RefreshGithubStatus) => {
             if !matches!(app.github, GithubAuthState::Connecting { .. }) {
@@ -554,7 +618,7 @@ fn handle_event(
     Ok(false)
 }
 
-fn spawn_github_status_refresh(tx: Sender<GithubAuthState>) {
+fn spawn_github_status_refresh(tx: Sender<RuntimeEvent>) {
     std::thread::spawn(move || {
         let state = match q_platform::github::resolve_token() {
             Ok(None) => GithubAuthState::NotConnected,
@@ -567,20 +631,91 @@ fn spawn_github_status_refresh(tx: Sender<GithubAuthState>) {
             },
             Err(error) => GithubAuthState::Failed(error.to_string()),
         };
-        let _ = tx.send(state);
+        let _ = tx.send(RuntimeEvent::Github(state));
     });
 }
 
-fn spawn_github_connect(tx: Sender<GithubAuthState>) {
+fn spawn_github_connect(tx: Sender<RuntimeEvent>) {
     std::thread::spawn(move || run_device_flow(&tx));
+}
+
+fn spawn_fetch_owners(tx: Sender<RuntimeEvent>) {
+    std::thread::spawn(move || {
+        let result = (|| -> std::result::Result<Vec<Option<String>>, String> {
+            let Some((token, _)) =
+                q_platform::github::resolve_token().map_err(|error| error.to_string())?
+            else {
+                return Err("connect GitHub in Settings first".to_string());
+            };
+            let mut owners = vec![None];
+            let orgs =
+                q_platform::github::list_org_logins(&token).map_err(|error| error.to_string())?;
+            owners.extend(orgs.into_iter().map(Some));
+            Ok(owners)
+        })();
+        let _ = tx.send(RuntimeEvent::Owners(result));
+    });
+}
+
+fn spawn_convert_to_team(tx: Sender<RuntimeEvent>, dir: PathBuf, org: Option<String>) {
+    std::thread::spawn(move || {
+        let result = convert_to_team(&dir, org.as_deref());
+        let _ = tx.send(RuntimeEvent::Converted { result });
+    });
+}
+
+/// Creates the private repo, initializes the local git repository, and
+/// pushes the workspace. Runs on a background thread.
+fn convert_to_team(dir: &Path, org: Option<&str>) -> std::result::Result<String, String> {
+    use q_platform::{git, github};
+    let Some((token, _)) = github::resolve_token().map_err(|error| error.to_string())? else {
+        return Err("connect GitHub in Settings first".to_string());
+    };
+    if git::is_repo(dir) {
+        return Err("workspace is already a team workspace".to_string());
+    }
+    let workspace = q_core::storage::load_dir(dir).map_err(|error| error.to_string())?;
+    let has_external = workspace
+        .tabs()
+        .iter()
+        .flat_map(|tab| tab.queue().iter())
+        .any(|prompt| prompt.external_markdown_path().is_some());
+    if has_external {
+        return Err(
+            "workspace has external Markdown references; team workspaces are inline-only"
+                .to_string(),
+        );
+    }
+    let meta = q_core::storage::read_meta(dir).map_err(|error| error.to_string())?;
+    let login = github::fetch_login(&token).map_err(|error| error.to_string())?;
+    let repo_name = format!("q-ws-{}", slugify(&meta.name));
+    let repo = github::create_workspace_repo(&token, org, &repo_name)
+        .map_err(|error| error.to_string())?;
+    git::init_team_repo(dir, &login).map_err(|error| error.to_string())?;
+    git::add_origin_and_push(dir, &repo.clone_url, &token).map_err(|error| error.to_string())?;
+    Ok(repo.full_name)
+}
+
+fn slugify(name: &str) -> String {
+    let slug: String = name
+        .to_lowercase()
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect();
+    let slug = slug.trim_matches('-').to_string();
+    if slug.is_empty() {
+        "workspace".to_string()
+    } else {
+        slug
+    }
 }
 
 /// Runs the whole device flow on a background thread, reporting progress
 /// through intermediate states.
-fn run_device_flow(tx: &Sender<GithubAuthState>) {
+fn run_device_flow(tx: &Sender<RuntimeEvent>) {
     use q_platform::github;
     let send = |state: GithubAuthState| {
-        let _ = tx.send(state);
+        let _ = tx.send(RuntimeEvent::Github(state));
     };
     let Some(client_id) = github::client_id() else {
         send(GithubAuthState::Failed(
@@ -645,6 +780,7 @@ fn workspace_entries(workspace_dir: &Path) -> Result<Vec<WorkspaceEntry>> {
         .into_iter()
         .map(|(dir, meta)| WorkspaceEntry {
             current: dir == workspace_dir,
+            team: q_platform::git::is_repo(&dir),
             dir,
             name: meta.name,
         })
@@ -700,6 +836,7 @@ fn handle_menu_effect(
     effect: &Effect,
     workspace_dir: &mut PathBuf,
     sync: &mut QueueSync,
+    tx: &Sender<RuntimeEvent>,
 ) -> Result<()> {
     match effect {
         Effect::OpenWorkspacesOverlay => {
@@ -713,11 +850,29 @@ fn handle_menu_effect(
             }
             switch_workspace(app, workspace_dir, sync, dir)?;
         }
-        Effect::CreateWorkspace(name) => {
+        Effect::CreateWorkspace { name, team } => {
             let Some(name) = validated_workspace_name(app, workspace_dir, name, None)? else {
                 return Ok(());
             };
             let dir = q_core::storage::init_dir(&workspaces_root(workspace_dir), &name)?;
+            q_core::storage::save_dir(&dir, &q_core::Workspace::new())?;
+            if *team {
+                // Stay on the current workspace and continue into owner
+                // selection; the conversion pipeline pushes the new dir.
+                let entries = workspace_entries(workspace_dir)?;
+                app.open_workspaces(entries);
+                if let Some(MenuState::Workspaces(overlay)) = app.menu.as_mut() {
+                    if let Some(index) = overlay.entries.iter().position(|entry| entry.dir == dir) {
+                        overlay.selected = index;
+                    }
+                    overlay.mode = WorkspacesMode::Info(crate::app::WorkspaceInfo {
+                        action: crate::app::InfoAction::ConvertToTeam,
+                        mode: InfoMode::LoadingOwners,
+                    });
+                }
+                spawn_fetch_owners(tx.clone());
+                return Ok(());
+            }
             switch_workspace(app, workspace_dir, sync, &dir)?;
             app.status = format!("created workspace {name}");
         }

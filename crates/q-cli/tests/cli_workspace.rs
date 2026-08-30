@@ -255,3 +255,35 @@ fn add_without_identity_emits_no_author_fields() {
     assert!(parsed[0].get("created_by").is_none());
     assert!(parsed[0].get("updated_by").is_none());
 }
+
+#[test]
+fn team_workspaces_reject_external_markdown_references() {
+    let dir = TempDir::new().unwrap();
+    q(&dir)
+        .args(["add", "seed", "--tab", "1"])
+        .assert()
+        .success();
+    // Mark the workspace as a team workspace (a git repository).
+    let root = dir.path().join("workspaces");
+    let workspace_dir = std::fs::read_dir(&root)
+        .unwrap()
+        .filter_map(|entry| entry.ok())
+        .map(|entry| entry.path())
+        .find(|path| path.join("workspace.json").exists())
+        .unwrap();
+    std::fs::create_dir_all(workspace_dir.join(".git")).unwrap();
+
+    let markdown = dir.path().join("note.md");
+    std::fs::write(&markdown, "# note").unwrap();
+    q(&dir)
+        .args(["add", markdown.to_str().unwrap(), "--tab", "1"])
+        .assert()
+        .failure()
+        .stderr(predicates::str::contains("inline prompts only"));
+
+    // The same path is accepted as literal text.
+    q(&dir)
+        .args(["add", markdown.to_str().unwrap(), "--tab", "1", "--text"])
+        .assert()
+        .success();
+}

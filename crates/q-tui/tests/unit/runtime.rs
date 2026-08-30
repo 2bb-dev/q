@@ -1094,12 +1094,16 @@ fn open_workspaces_effect_lists_entries_with_the_current_marker() {
     let (dir, mut app, mut current, mut sync) = menu_fixture();
     q_core::storage::init_dir(dir.path(), "team").unwrap();
 
-    handle_menu_effect(
-        &mut app,
-        &Effect::OpenWorkspacesOverlay,
-        &mut current,
-        &mut sync,
-    )
+    {
+        let (tx, _rx) = std::sync::mpsc::channel::<RuntimeEvent>();
+        handle_menu_effect(
+            &mut app,
+            &Effect::OpenWorkspacesOverlay,
+            &mut current,
+            &mut sync,
+            &tx,
+        )
+    }
     .unwrap();
 
     let Some(MenuState::Workspaces(overlay)) = &app.menu else {
@@ -1118,12 +1122,19 @@ fn open_workspaces_effect_lists_entries_with_the_current_marker() {
 fn create_workspace_effect_creates_and_switches_this_window() {
     let (_dir, mut app, mut current, mut sync) = menu_fixture();
 
-    handle_menu_effect(
-        &mut app,
-        &Effect::CreateWorkspace("team".to_string()),
-        &mut current,
-        &mut sync,
-    )
+    {
+        let (tx, _rx) = std::sync::mpsc::channel::<RuntimeEvent>();
+        handle_menu_effect(
+            &mut app,
+            &Effect::CreateWorkspace {
+                name: "team".to_string(),
+                team: false,
+            },
+            &mut current,
+            &mut sync,
+            &tx,
+        )
+    }
     .unwrap();
 
     assert!(current.join("workspace.json").exists());
@@ -1138,12 +1149,19 @@ fn create_workspace_effect_rejects_duplicate_names() {
     let before = current.clone();
     app.open_workspaces(Vec::new());
 
-    handle_menu_effect(
-        &mut app,
-        &Effect::CreateWorkspace("PERSONAL".to_string()),
-        &mut current,
-        &mut sync,
-    )
+    {
+        let (tx, _rx) = std::sync::mpsc::channel::<RuntimeEvent>();
+        handle_menu_effect(
+            &mut app,
+            &Effect::CreateWorkspace {
+                name: "PERSONAL".to_string(),
+                team: false,
+            },
+            &mut current,
+            &mut sync,
+            &tx,
+        )
+    }
     .unwrap();
 
     assert_eq!(current, before);
@@ -1164,12 +1182,16 @@ fn switch_workspace_effect_loads_the_other_queue() {
         .unwrap();
     q_core::storage::save_dir(&team, &workspace).unwrap();
 
-    handle_menu_effect(
-        &mut app,
-        &Effect::SwitchWorkspace(team.clone()),
-        &mut current,
-        &mut sync,
-    )
+    {
+        let (tx, _rx) = std::sync::mpsc::channel::<RuntimeEvent>();
+        handle_menu_effect(
+            &mut app,
+            &Effect::SwitchWorkspace(team.clone()),
+            &mut current,
+            &mut sync,
+            &tx,
+        )
+    }
     .unwrap();
 
     assert_eq!(current, team);
@@ -1182,12 +1204,16 @@ fn delete_workspace_effect_removes_dir_and_falls_back_when_current() {
     q_core::storage::init_dir(dir.path(), "team").unwrap();
     let deleted = current.clone();
 
-    handle_menu_effect(
-        &mut app,
-        &Effect::DeleteWorkspace(current.clone()),
-        &mut current,
-        &mut sync,
-    )
+    {
+        let (tx, _rx) = std::sync::mpsc::channel::<RuntimeEvent>();
+        handle_menu_effect(
+            &mut app,
+            &Effect::DeleteWorkspace(current.clone()),
+            &mut current,
+            &mut sync,
+            &tx,
+        )
+    }
     .unwrap();
 
     assert!(!deleted.exists());
@@ -1203,12 +1229,16 @@ fn delete_workspace_effect_refuses_the_last_workspace() {
     let (_dir, mut app, mut current, mut sync) = menu_fixture();
     app.open_workspaces(Vec::new());
 
-    handle_menu_effect(
-        &mut app,
-        &Effect::DeleteWorkspace(current.clone()),
-        &mut current,
-        &mut sync,
-    )
+    {
+        let (tx, _rx) = std::sync::mpsc::channel::<RuntimeEvent>();
+        handle_menu_effect(
+            &mut app,
+            &Effect::DeleteWorkspace(current.clone()),
+            &mut current,
+            &mut sync,
+            &tx,
+        )
+    }
     .unwrap();
 
     assert!(current.exists());

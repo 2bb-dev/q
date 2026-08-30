@@ -842,9 +842,16 @@ fn render_workspaces_overlay(frame: &mut Frame, overlay: &WorkspacesOverlay, cur
         };
         lines.push(Line::styled(format!("{marker}{}", entry.name), style));
     }
-    if let WorkspacesMode::Create { value } = &overlay.mode {
+    if let WorkspacesMode::Create { value, team } = &overlay.mode {
         lines.push(Line::from(vec![
-            Span::styled("New name: ", dim()),
+            Span::styled(
+                if *team {
+                    "New team name: "
+                } else {
+                    "New name: "
+                },
+                dim(),
+            ),
             Span::raw(value.clone()),
             Span::styled(
                 if cursor_on { "\u{2588}" } else { " " },
@@ -883,28 +890,23 @@ fn render_workspace_info(
     };
     let area = frame.area();
     let width = area.width.saturating_sub(6).clamp(12, 44);
-    let dialog_area = centered_rect(width, 8.min(area.height), area);
-    let block = Block::default()
-        .title(" Workspace ")
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(ACCENT));
-    let inner = block.inner(dialog_area);
-    frame.render_widget(Clear, dialog_area);
-    frame.render_widget(block, dialog_area);
-
     let mut lines = vec![
         Line::from(vec![Span::styled("Name: ", dim()), Span::raw(&entry.name)]),
-        Line::from(vec![Span::styled("Kind: ", dim()), Span::raw("personal")]),
+        Line::from(vec![
+            Span::styled("Kind: ", dim()),
+            Span::raw(if entry.team { "team" } else { "personal" }),
+        ]),
         Line::raw(""),
     ];
     match &info.mode {
         InfoMode::View => {
-            let actions = [
-                (InfoAction::Rename, " Rename"),
-                (InfoAction::Delete, " Delete"),
-            ];
-            for (action, label) in actions {
-                let style = if info.action == action {
+            for action in InfoAction::available(entry.team) {
+                let label = match action {
+                    InfoAction::Rename => " Rename",
+                    InfoAction::ConvertToTeam => " Make team workspace",
+                    InfoAction::Delete => " Delete",
+                };
+                let style = if info.action == *action {
                     Style::default().add_modifier(Modifier::REVERSED)
                 } else {
                     Style::default()
@@ -912,6 +914,32 @@ fn render_workspace_info(
                 lines.push(Line::styled(label, style));
             }
             lines.push(Line::styled("Enter select \u{b7} Esc back", dim()));
+        }
+        InfoMode::LoadingOwners => {
+            lines.push(Line::styled("Fetching owners from GitHub...", dim()));
+            lines.push(Line::styled("Esc cancel", dim()));
+        }
+        InfoMode::SelectOwner { owners, selected } => {
+            lines.push(Line::styled("Repo owner:", dim()));
+            for (index, owner) in owners.iter().enumerate() {
+                let label = match owner {
+                    Some(org) => format!(" {org}"),
+                    None => " personal account".to_string(),
+                };
+                let style = if index == *selected {
+                    Style::default().add_modifier(Modifier::REVERSED)
+                } else {
+                    Style::default()
+                };
+                lines.push(Line::styled(label, style));
+            }
+            lines.push(Line::styled("Enter create repo \u{b7} Esc cancel", dim()));
+        }
+        InfoMode::Converting => {
+            lines.push(Line::styled(
+                "Creating the private repo and pushing...",
+                dim(),
+            ));
         }
         InfoMode::Rename { value } => {
             lines.push(Line::from(vec![
@@ -932,6 +960,15 @@ fn render_workspace_info(
             lines.push(Line::styled("Enter delete \u{b7} Esc cancel", dim()));
         }
     }
+    let height = ((lines.len() as u16) + 2).min(area.height);
+    let dialog_area = centered_rect(width, height, area);
+    let block = Block::default()
+        .title(" Workspace ")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(ACCENT));
+    let inner = block.inner(dialog_area);
+    frame.render_widget(Clear, dialog_area);
+    frame.render_widget(block, dialog_area);
     frame.render_widget(Paragraph::new(lines), inner);
 }
 

@@ -212,6 +212,63 @@ struct UserResponse {
     login: String,
 }
 
+/// Topic marking repositories that hold q workspaces.
+pub const WORKSPACE_TOPIC: &str = "q-workspace";
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct CreatedRepo {
+    pub full_name: String,
+    pub clone_url: String,
+}
+
+/// Creates a private repository for a team workspace under the user's
+/// account, or under `org` when given, and tags it with the workspace topic.
+pub fn create_workspace_repo(
+    token: &str,
+    org: Option<&str>,
+    name: &str,
+) -> Result<CreatedRepo, GithubError> {
+    let url = match org {
+        Some(org) => format!("https://api.github.com/orgs/{org}/repos"),
+        None => "https://api.github.com/user/repos".to_string(),
+    };
+    let response = ureq::post(&url)
+        .set("Accept", "application/vnd.github+json")
+        .set("Authorization", &format!("Bearer {token}"))
+        .set("User-Agent", USER_AGENT)
+        .send_json(ureq::json!({
+            "name": name,
+            "private": true,
+            "description": "q prompt queue workspace",
+        }))?;
+    let repo: CreatedRepo = response.into_json()?;
+    ureq::request(
+        "PUT",
+        &format!("https://api.github.com/repos/{}/topics", repo.full_name),
+    )
+    .set("Accept", "application/vnd.github+json")
+    .set("Authorization", &format!("Bearer {token}"))
+    .set("User-Agent", USER_AGENT)
+    .send_json(ureq::json!({ "names": [WORKSPACE_TOPIC] }))?;
+    Ok(repo)
+}
+
+#[derive(Debug, Deserialize)]
+struct OrgResponse {
+    login: String,
+}
+
+/// Logins of the organizations the token's user belongs to.
+pub fn list_org_logins(token: &str) -> Result<Vec<String>, GithubError> {
+    let response = ureq::get("https://api.github.com/user/orgs")
+        .set("Accept", "application/vnd.github+json")
+        .set("Authorization", &format!("Bearer {token}"))
+        .set("User-Agent", USER_AGENT)
+        .call()?;
+    let orgs: Vec<OrgResponse> = response.into_json()?;
+    Ok(orgs.into_iter().map(|org| org.login).collect())
+}
+
 /// Fetches the login of the token's user.
 pub fn fetch_login(token: &str) -> Result<String, GithubError> {
     let response = ureq::get("https://api.github.com/user")
