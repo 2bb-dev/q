@@ -1,4 +1,6 @@
-use crate::app::{App, EditorOrigin, Effect, MenuState, QueueMutation, WorkspaceEntry};
+use crate::app::{
+    App, EditorOrigin, Effect, GithubAuthState, MenuState, QueueMutation, WorkspaceEntry,
+};
 use crate::reducer::reduce;
 use crate::render::draw;
 use crate::{Input, Pane};
@@ -17,6 +19,7 @@ use q_platform::lock::FileLock;
 use ratatui::{backend::CrosstermBackend, Terminal};
 use std::io::{self, Stdout};
 use std::path::{Path, PathBuf};
+use std::sync::mpsc::{Receiver, Sender};
 use std::time::{Duration, Instant};
 
 const BLINK_PERIOD_MS: u128 = 1000;
@@ -54,8 +57,13 @@ fn event_loop(
     let start = Instant::now();
     let mut workspace_dir = workspace_dir.to_path_buf();
     let mut sync = QueueSync::new(&workspace_dir);
+    let (github_tx, github_rx): (Sender<GithubAuthState>, Receiver<GithubAuthState>) =
+        std::sync::mpsc::channel();
     loop {
         sync.refresh_if_due(app, &workspace_dir);
+        while let Ok(state) = github_rx.try_recv() {
+            app.github = state;
+        }
 
         let cursor_on = cursor_is_on(start.elapsed());
         term.draw(|f| draw(f, app, cursor_on))?;
@@ -73,6 +81,7 @@ fn event_loop(
                 clipboard,
                 &mut workspace_dir,
                 &mut sync,
+                &github_tx,
             )? {
                 return Ok(());
             }
@@ -361,6 +370,7 @@ fn handle_event(
     clipboard: &mut dyn Clipboard,
     workspace_dir: &mut PathBuf,
     sync: &mut QueueSync,
+    github_tx: &Sender<GithubAuthState>,
 ) -> Result<bool> {
     let input = match event {
         Event::Key(key)
@@ -486,6 +496,31 @@ fn handle_event(
                 app.status = format!("workspace operation failed: {error}");
             }
         }
+        Some(Effect::RefreshGithubStatus) => {
+            if !matches!(app.github, GithubAuthState::Connecting { .. }) {
+                app.github = GithubAuthState::Checking;
+                spawn_github_status_refresh(github_tx.clone());
+            }
+        }
+        Some(Effect::GithubConnect) => {
+            app.github = GithubAuthState::Checking;
+            spawn_github_connect(github_tx.clone());
+        }
+        Some(Effect::GithubDisconnect) => {
+            if matches!(app.github, GithubAuthState::Connected { gh_cli: true, .. }) {
+                app.status =
+                    "token is borrowed from the gh CLI; run 'gh auth logout' to disconnect"
+                        .to_string();
+            } else {
+                match q_platform::github::delete_token() {
+                    Ok(_) => {
+                        app.github = GithubAuthState::Checking;
+                        spawn_github_status_refresh(github_tx.clone());
+                    }
+                    Err(error) => app.status = format!("disconnect failed: {error}"),
+                }
+            }
+        }
         None => {
             if !app.status.is_empty() {
                 app.status.clear();
@@ -493,6 +528,85 @@ fn handle_event(
         }
     }
     Ok(false)
+}
+
+fn spawn_github_status_refresh(tx: Sender<GithubAuthState>) {
+    std::thread::spawn(move || {
+        let state = match q_platform::github::resolve_token() {
+            Ok(None) => GithubAuthState::NotConnected,
+            Ok(Some((token, source))) => match q_platform::github::fetch_login(&token) {
+                Ok(login) => GithubAuthState::Connected {
+                    login,
+                    gh_cli: source == q_platform::github::TokenSource::GhCli,
+                },
+                Err(error) => GithubAuthState::Failed(error.to_string()),
+            },
+            Err(error) => GithubAuthState::Failed(error.to_string()),
+        };
+        let _ = tx.send(state);
+    });
+}
+
+fn spawn_github_connect(tx: Sender<GithubAuthState>) {
+    std::thread::spawn(move || run_device_flow(&tx));
+}
+
+/// Runs the whole device flow on a background thread, reporting progress
+/// through intermediate states.
+fn run_device_flow(tx: &Sender<GithubAuthState>) {
+    use q_platform::github;
+    let send = |state: GithubAuthState| {
+        let _ = tx.send(state);
+    };
+    let Some(client_id) = github::client_id() else {
+        send(GithubAuthState::Failed(
+            "no OAuth client id configured; set QCLI_GITHUB_CLIENT_ID or sign in with 'gh auth login'"
+                .to_string(),
+        ));
+        return;
+    };
+    let authorization = match github::start_device_flow(&client_id) {
+        Ok(authorization) => authorization,
+        Err(error) => {
+            send(GithubAuthState::Failed(error.to_string()));
+            return;
+        }
+    };
+    send(GithubAuthState::Connecting {
+        user_code: authorization.user_code.clone(),
+        verification_uri: authorization.verification_uri.clone(),
+    });
+    let mut interval = authorization.poll_interval();
+    loop {
+        std::thread::sleep(interval);
+        match github::poll_device_flow(&client_id, &authorization.device_code) {
+            Ok(q_platform::github::DevicePoll::Pending { slow_down }) => {
+                if slow_down {
+                    interval += Duration::from_secs(5);
+                }
+            }
+            Ok(q_platform::github::DevicePoll::Token(token)) => {
+                if let Err(error) = github::store_token(&token) {
+                    send(GithubAuthState::Failed(format!(
+                        "failed to store token: {error}"
+                    )));
+                    return;
+                }
+                match github::fetch_login(&token) {
+                    Ok(login) => send(GithubAuthState::Connected {
+                        login,
+                        gh_cli: false,
+                    }),
+                    Err(error) => send(GithubAuthState::Failed(error.to_string())),
+                }
+                return;
+            }
+            Err(error) => {
+                send(GithubAuthState::Failed(error.to_string()));
+                return;
+            }
+        }
+    }
 }
 
 fn workspaces_root(workspace_dir: &Path) -> PathBuf {

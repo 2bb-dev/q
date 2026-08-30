@@ -1,12 +1,6 @@
 use super::*;
-use std::sync::Mutex;
+use crate::TEST_ENV_GUARD as ENV_GUARD;
 use tempfile::TempDir;
-
-// Serializes env-var mutation across tests in this module. Cargo runs
-// unit tests in parallel within a single binary, and QCLI_APP_DIR is
-// process-wide; without this guard concurrent tests could observe each
-// other's value and flake.
-static ENV_GUARD: Mutex<()> = Mutex::new(());
 
 fn set_app_dir(path: &std::path::Path) {
     std::env::set_var("QCLI_APP_DIR", path);

@@ -11,6 +11,9 @@ test-support = []
 [dependencies]
 thiserror = { workspace = true }
 arboard = { workspace = true }
+ureq = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
 fd-lock = { workspace = true }
 directories = { workspace = true }
 chrono = { workspace = true }
