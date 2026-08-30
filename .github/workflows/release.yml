@@ -133,12 +133,12 @@ jobs:
       - name: Publish platform packages
         run: |
           for pkg in npm-dist/q-cli-*; do
-            npm publish "$pkg" --provenance --access public
+            npm publish "./$pkg" --provenance --access public
           done
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Publish q-cli
-        run: npm publish npm-dist/q-cli --provenance --access public
+        run: npm publish ./npm-dist/q-cli --provenance --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
