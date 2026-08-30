@@ -685,3 +685,160 @@ fn external_editor_requests_runtime_save_without_writing_in_the_reducer() {
     assert_eq!(std::fs::read_to_string(&path).unwrap(), "original");
     assert_eq!(app.editor.as_ref().unwrap().buffer.text(), "original!");
 }
+
+// --- Menu overlay state machine ---
+
+use crate::app::{
+    InfoAction, InfoMode, MenuItem, MenuState, WorkspaceEntry, WorkspaceInfo, WorkspacesMode,
+};
+
+fn open_workspaces_with(app: &mut App, names: &[&str]) {
+    let entries = names
+        .iter()
+        .enumerate()
+        .map(|(index, name)| WorkspaceEntry {
+            dir: std::path::PathBuf::from(format!("/tmp/ws/{name}")),
+            name: name.to_string(),
+            current: index == 0,
+        })
+        .collect();
+    app.open_workspaces(entries);
+}
+
+#[test]
+fn open_menu_shows_root_and_esc_walks_back_one_level() {
+    let mut app = app_with(1);
+    reduce(&mut app, Input::OpenMenu);
+    assert_eq!(
+        app.menu,
+        Some(MenuState::Root {
+            selected: MenuItem::Workspaces
+        })
+    );
+
+    reduce(&mut app, Input::Down);
+    reduce(&mut app, Input::Enter);
+    assert_eq!(app.menu, Some(MenuState::Settings));
+
+    reduce(&mut app, Input::Esc);
+    assert_eq!(
+        app.menu,
+        Some(MenuState::Root {
+            selected: MenuItem::Settings
+        })
+    );
+    reduce(&mut app, Input::Esc);
+    assert_eq!(app.menu, None);
+}
+
+#[test]
+fn root_enter_on_workspaces_requests_the_overlay() {
+    let mut app = app_with(1);
+    reduce(&mut app, Input::OpenMenu);
+    assert_eq!(
+        reduce(&mut app, Input::Enter),
+        Some(Effect::OpenWorkspacesOverlay)
+    );
+}
+
+#[test]
+fn queue_keys_are_ignored_while_the_menu_is_open() {
+    let mut app = app_with(2);
+    app.focus = Pane::Queue;
+    app.selected = Some(0);
+    reduce(&mut app, Input::OpenMenu);
+
+    assert_eq!(reduce(&mut app, Input::Char('d')), None);
+    assert!(app.delete_prompt_dialog.is_none());
+    assert_eq!(reduce(&mut app, Input::Char('p')), None);
+    assert!(!app.visible_prompts()[0].pinned());
+}
+
+#[test]
+fn workspaces_list_selects_switches_and_escapes_to_root() {
+    let mut app = app_with(1);
+    open_workspaces_with(&mut app, &["personal", "team"]);
+
+    reduce(&mut app, Input::Down);
+    assert_eq!(
+        reduce(&mut app, Input::Enter),
+        Some(Effect::SwitchWorkspace(std::path::PathBuf::from(
+            "/tmp/ws/team"
+        )))
+    );
+
+    reduce(&mut app, Input::Esc);
+    assert_eq!(
+        app.menu,
+        Some(MenuState::Root {
+            selected: MenuItem::Workspaces
+        })
+    );
+}
+
+#[test]
+fn create_mode_collects_a_name_and_requests_creation() {
+    let mut app = app_with(1);
+    open_workspaces_with(&mut app, &["personal"]);
+
+    reduce(&mut app, Input::Char('n'));
+    for c in "team".chars() {
+        reduce(&mut app, Input::Char(c));
+    }
+    reduce(&mut app, Input::Backspace);
+    assert_eq!(
+        reduce(&mut app, Input::Enter),
+        Some(Effect::CreateWorkspace("tea".to_string()))
+    );
+}
+
+#[test]
+fn info_dialog_renames_and_deletes_the_selected_workspace() {
+    let mut app = app_with(1);
+    open_workspaces_with(&mut app, &["personal", "team"]);
+    reduce(&mut app, Input::Down);
+
+    reduce(&mut app, Input::Char('i'));
+    reduce(&mut app, Input::Enter); // Rename action prefills the name
+    for c in " 2".chars() {
+        reduce(&mut app, Input::Char(c));
+    }
+    assert_eq!(
+        reduce(&mut app, Input::Enter),
+        Some(Effect::RenameWorkspace {
+            dir: std::path::PathBuf::from("/tmp/ws/team"),
+            name: "team 2".to_string(),
+        })
+    );
+
+    reduce(&mut app, Input::Esc); // back to info view
+    reduce(&mut app, Input::Down); // select Delete
+    reduce(&mut app, Input::Enter); // confirm dialog
+    assert_eq!(
+        reduce(&mut app, Input::Enter),
+        Some(Effect::DeleteWorkspace(std::path::PathBuf::from(
+            "/tmp/ws/team"
+        )))
+    );
+}
+
+#[test]
+fn info_delete_refuses_the_last_workspace() {
+    let mut app = app_with(1);
+    open_workspaces_with(&mut app, &["personal"]);
+
+    reduce(&mut app, Input::Char('i'));
+    reduce(&mut app, Input::Down); // select Delete
+    assert_eq!(reduce(&mut app, Input::Enter), None);
+    let Some(MenuState::Workspaces(overlay)) = &app.menu else {
+        panic!("workspaces overlay expected");
+    };
+    assert_eq!(overlay.error, "cannot delete the last workspace");
+    assert_eq!(
+        overlay.mode,
+        WorkspacesMode::Info(WorkspaceInfo {
+            action: InfoAction::Delete,
+            mode: InfoMode::View,
+        })
+    );
+}

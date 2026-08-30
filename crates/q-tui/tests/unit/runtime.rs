@@ -139,7 +139,14 @@ fn mouse_click_selects_tab_and_opens_create_dialog() {
         modifiers: KeyModifiers::NONE,
     });
 
-    assert!(!handle_event(click, &mut app, &mut clipboard, &queue_path).unwrap());
+    assert!(!handle_event(
+        click,
+        &mut app,
+        &mut clipboard,
+        &mut queue_path.clone(),
+        &mut QueueSync::new(&queue_path)
+    )
+    .unwrap());
     assert_eq!(app.active_tab_id, target);
 
     app.tab_hits[0].target = crate::app::TabHitTarget::Create;
@@ -149,7 +156,14 @@ fn mouse_click_selects_tab_and_opens_create_dialog() {
         row: area.y,
         modifiers: KeyModifiers::NONE,
     });
-    assert!(!handle_event(click_create, &mut app, &mut clipboard, &queue_path).unwrap());
+    assert!(!handle_event(
+        click_create,
+        &mut app,
+        &mut clipboard,
+        &mut queue_path.clone(),
+        &mut QueueSync::new(&queue_path)
+    )
+    .unwrap());
     assert!(app.tab_dialog.is_some());
 }
 
@@ -179,7 +193,14 @@ fn left_click_focuses_prompt_and_composer() {
         row: prompt_area.y,
         modifiers: KeyModifiers::NONE,
     });
-    handle_event(click_prompt, &mut app, &mut clipboard, &queue_path).unwrap();
+    handle_event(
+        click_prompt,
+        &mut app,
+        &mut clipboard,
+        &mut queue_path.clone(),
+        &mut QueueSync::new(&queue_path),
+    )
+    .unwrap();
     assert_eq!(app.focus, Pane::Queue);
     assert_eq!(app.selected, Some(0));
 
@@ -189,7 +210,14 @@ fn left_click_focuses_prompt_and_composer() {
         row: composer_area.y,
         modifiers: KeyModifiers::NONE,
     });
-    handle_event(click_composer, &mut app, &mut clipboard, &queue_path).unwrap();
+    handle_event(
+        click_composer,
+        &mut app,
+        &mut clipboard,
+        &mut queue_path.clone(),
+        &mut QueueSync::new(&queue_path),
+    )
+    .unwrap();
     assert_eq!(app.focus, Pane::Composer);
 }
 
@@ -213,7 +241,14 @@ fn right_click_tab_and_click_rename_opens_dialog() {
         modifiers: KeyModifiers::NONE,
     });
 
-    assert!(!handle_event(right_click, &mut app, &mut clipboard, &queue_path).unwrap());
+    assert!(!handle_event(
+        right_click,
+        &mut app,
+        &mut clipboard,
+        &mut queue_path.clone(),
+        &mut QueueSync::new(&queue_path)
+    )
+    .unwrap());
     assert_eq!(app.tab_menu.as_ref().unwrap().tab_id, target);
 
     let rename_area = ratatui::layout::Rect::new(2, 2, 10, 1);
@@ -228,7 +263,14 @@ fn right_click_tab_and_click_rename_opens_dialog() {
         modifiers: KeyModifiers::NONE,
     });
 
-    assert!(!handle_event(left_click, &mut app, &mut clipboard, &queue_path).unwrap());
+    assert!(!handle_event(
+        left_click,
+        &mut app,
+        &mut clipboard,
+        &mut queue_path.clone(),
+        &mut QueueSync::new(&queue_path)
+    )
+    .unwrap());
     assert!(matches!(
         app.tab_dialog.as_ref().map(|dialog| dialog.mode),
         Some(crate::app::TabDialogMode::Rename(id)) if id == target
@@ -344,7 +386,8 @@ fn wheel_scrolls_the_preview() {
         wheel(MouseEventKind::ScrollDown),
         &mut app,
         &mut clipboard,
-        &queue_path,
+        &mut queue_path.clone(),
+        &mut QueueSync::new(&queue_path),
     )
     .unwrap();
     assert_eq!(app.preview.as_ref().unwrap().scroll, 1);
@@ -353,7 +396,8 @@ fn wheel_scrolls_the_preview() {
         wheel(MouseEventKind::ScrollUp),
         &mut app,
         &mut clipboard,
-        &queue_path,
+        &mut queue_path.clone(),
+        &mut QueueSync::new(&queue_path),
     )
     .unwrap();
     assert_eq!(app.preview.as_ref().unwrap().scroll, 0);
@@ -383,7 +427,14 @@ fn clicks_are_ignored_while_the_preview_is_open() {
         row: composer_area.y,
         modifiers: KeyModifiers::NONE,
     });
-    handle_event(click, &mut app, &mut clipboard, &queue_path).unwrap();
+    handle_event(
+        click,
+        &mut app,
+        &mut clipboard,
+        &mut queue_path.clone(),
+        &mut QueueSync::new(&queue_path),
+    )
+    .unwrap();
 
     assert_eq!(app.focus, Pane::Queue);
     assert!(app.preview.is_some());
@@ -467,7 +518,14 @@ fn clicking_a_history_result_opens_it_fullscreen() {
         row: hit.y,
         modifiers: KeyModifiers::NONE,
     });
-    handle_event(click, &mut app, &mut clipboard, &queue_path).unwrap();
+    handle_event(
+        click,
+        &mut app,
+        &mut clipboard,
+        &mut queue_path.clone(),
+        &mut QueueSync::new(&queue_path),
+    )
+    .unwrap();
 
     assert_eq!(
         app.preview.as_ref().map(|preview| preview.source.clone()),
@@ -477,7 +535,14 @@ fn clicking_a_history_result_opens_it_fullscreen() {
     );
 
     let enter = Event::Key(key(KeyCode::Enter));
-    handle_event(enter, &mut app, &mut clipboard, &queue_path).unwrap();
+    handle_event(
+        enter,
+        &mut app,
+        &mut clipboard,
+        &mut queue_path.clone(),
+        &mut QueueSync::new(&queue_path),
+    )
+    .unwrap();
 
     assert_eq!(clipboard.last.as_deref(), Some("clicked prompt"));
     assert!(app.preview.is_none());
@@ -865,7 +930,8 @@ fn inline_editor_save_error_keeps_the_unsaved_buffer_open() {
         Event::Key(with_mods(KeyCode::Char('s'), KeyModifiers::CONTROL)),
         &mut app,
         &mut clipboard,
-        &queue_path,
+        &mut queue_path.clone(),
+        &mut QueueSync::new(&queue_path),
     )
     .unwrap());
 
@@ -969,11 +1035,162 @@ fn clipboard_failure_does_not_remove_unpinned_prompt() {
     let mut clipboard = FailingClipboard;
 
     let event = Event::Key(key(KeyCode::Enter));
-    assert!(!handle_event(event, &mut app, &mut clipboard, &queue_path).unwrap());
+    assert!(!handle_event(
+        event,
+        &mut app,
+        &mut clipboard,
+        &mut queue_path.clone(),
+        &mut QueueSync::new(&queue_path)
+    )
+    .unwrap());
     assert!(app.workspace.get_prompt(id).is_some());
     assert!(q_core::storage::load_dir(&queue_path)
         .unwrap()
         .get_prompt(id)
         .is_some());
     assert!(app.status.contains("clipboard failed"));
+}
+
+// --- Workspace menu effects ---
+
+fn menu_fixture() -> (tempfile::TempDir, App, std::path::PathBuf, QueueSync) {
+    let dir = tempfile::TempDir::new().unwrap();
+    let personal = q_core::storage::init_dir(dir.path(), "personal").unwrap();
+    let mut workspace = q_core::Workspace::new();
+    let tab = workspace.first_tab_id();
+    workspace
+        .add_prompt(tab, q_core::Prompt::new("personal prompt").unwrap())
+        .unwrap();
+    q_core::storage::save_dir(&personal, &workspace).unwrap();
+    let sync = QueueSync::new(&personal);
+    (dir, App::new(workspace), personal, sync)
+}
+
+#[test]
+fn open_workspaces_effect_lists_entries_with_the_current_marker() {
+    let (dir, mut app, mut current, mut sync) = menu_fixture();
+    q_core::storage::init_dir(dir.path(), "team").unwrap();
+
+    handle_menu_effect(
+        &mut app,
+        &Effect::OpenWorkspacesOverlay,
+        &mut current,
+        &mut sync,
+    )
+    .unwrap();
+
+    let Some(MenuState::Workspaces(overlay)) = &app.menu else {
+        panic!("workspaces overlay expected");
+    };
+    let entries: Vec<_> = overlay
+        .entries
+        .iter()
+        .map(|entry| (entry.name.as_str(), entry.current))
+        .collect();
+    assert_eq!(entries, vec![("personal", true), ("team", false)]);
+    assert_eq!(overlay.selected, 0);
+}
+
+#[test]
+fn create_workspace_effect_creates_and_switches_this_window() {
+    let (_dir, mut app, mut current, mut sync) = menu_fixture();
+
+    handle_menu_effect(
+        &mut app,
+        &Effect::CreateWorkspace("team".to_string()),
+        &mut current,
+        &mut sync,
+    )
+    .unwrap();
+
+    assert!(current.join("workspace.json").exists());
+    assert_eq!(q_core::storage::read_meta(&current).unwrap().name, "team");
+    assert!(app.menu.is_none());
+    assert!(app.visible_prompts().is_empty());
+}
+
+#[test]
+fn create_workspace_effect_rejects_duplicate_names() {
+    let (_dir, mut app, mut current, mut sync) = menu_fixture();
+    let before = current.clone();
+    app.open_workspaces(Vec::new());
+
+    handle_menu_effect(
+        &mut app,
+        &Effect::CreateWorkspace("PERSONAL".to_string()),
+        &mut current,
+        &mut sync,
+    )
+    .unwrap();
+
+    assert_eq!(current, before);
+    let Some(MenuState::Workspaces(overlay)) = &app.menu else {
+        panic!("workspaces overlay expected");
+    };
+    assert!(overlay.error.contains("already exists"));
+}
+
+#[test]
+fn switch_workspace_effect_loads_the_other_queue() {
+    let (dir, mut app, mut current, mut sync) = menu_fixture();
+    let team = q_core::storage::init_dir(dir.path(), "team").unwrap();
+    let mut workspace = q_core::Workspace::new();
+    let tab = workspace.first_tab_id();
+    workspace
+        .add_prompt(tab, q_core::Prompt::new("team prompt").unwrap())
+        .unwrap();
+    q_core::storage::save_dir(&team, &workspace).unwrap();
+
+    handle_menu_effect(
+        &mut app,
+        &Effect::SwitchWorkspace(team.clone()),
+        &mut current,
+        &mut sync,
+    )
+    .unwrap();
+
+    assert_eq!(current, team);
+    assert_eq!(app.visible_prompts()[0].inline_text(), Some("team prompt"));
+}
+
+#[test]
+fn delete_workspace_effect_removes_dir_and_falls_back_when_current() {
+    let (dir, mut app, mut current, mut sync) = menu_fixture();
+    q_core::storage::init_dir(dir.path(), "team").unwrap();
+    let deleted = current.clone();
+
+    handle_menu_effect(
+        &mut app,
+        &Effect::DeleteWorkspace(current.clone()),
+        &mut current,
+        &mut sync,
+    )
+    .unwrap();
+
+    assert!(!deleted.exists());
+    assert_eq!(q_core::storage::read_meta(&current).unwrap().name, "team");
+    let Some(MenuState::Workspaces(overlay)) = &app.menu else {
+        panic!("workspaces overlay expected");
+    };
+    assert_eq!(overlay.entries.len(), 1);
+}
+
+#[test]
+fn delete_workspace_effect_refuses_the_last_workspace() {
+    let (_dir, mut app, mut current, mut sync) = menu_fixture();
+    app.open_workspaces(Vec::new());
+
+    handle_menu_effect(
+        &mut app,
+        &Effect::DeleteWorkspace(current.clone()),
+        &mut current,
+        &mut sync,
+    )
+    .unwrap();
+
+    assert!(current.exists());
+    let Some(MenuState::Workspaces(overlay)) = &app.menu else {
+        panic!("workspaces overlay expected");
+    };
+    assert_eq!(overlay.error, "cannot delete the last workspace");
 }

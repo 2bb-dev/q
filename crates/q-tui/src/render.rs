@@ -1,5 +1,6 @@
 use crate::app::{
-    App, EditorOrigin, Pane, PromptHit, SearchHit, TabHit, TabHitTarget, TabMenuAction, TabMenuHit,
+    App, EditorOrigin, InfoAction, InfoMode, MenuItem, MenuState, Pane, PromptHit, SearchHit,
+    TabHit, TabHitTarget, TabMenuAction, TabMenuHit, WorkspacesMode, WorkspacesOverlay,
 };
 use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
@@ -54,6 +55,7 @@ pub fn draw(frame: &mut Frame, app: &mut App, cursor_on: bool) {
     render_tab_dialog(frame, app, cursor_on);
     render_close_tab_dialog(frame, app);
     render_delete_prompt_dialog(frame, app);
+    render_menu(frame, app, cursor_on);
 }
 
 fn composer_height(lines: &[String], term_width: u16, term_height: u16) -> u16 {
@@ -713,6 +715,183 @@ fn render_editor(frame: &mut Frame, app: &mut App, cursor_on: bool) {
             inner,
         );
     }
+}
+
+fn render_menu(frame: &mut Frame, app: &App, cursor_on: bool) {
+    let Some(menu) = &app.menu else {
+        return;
+    };
+    let area = frame.area();
+    if area.width < 12 || area.height < 6 {
+        return;
+    }
+    match menu {
+        MenuState::Root { selected } => {
+            let dialog_area = centered_rect(24.min(area.width), 4, area);
+            let block = Block::default()
+                .title(" Menu ")
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(ACCENT));
+            let inner = block.inner(dialog_area);
+            frame.render_widget(Clear, dialog_area);
+            frame.render_widget(block, dialog_area);
+            let items = [
+                (MenuItem::Workspaces, " Workspaces"),
+                (MenuItem::Settings, " Settings"),
+            ];
+            let lines: Vec<_> = items
+                .iter()
+                .map(|(item, label)| {
+                    let style = if selected == item {
+                        Style::default().add_modifier(Modifier::REVERSED)
+                    } else {
+                        Style::default()
+                    };
+                    Line::styled(*label, style)
+                })
+                .collect();
+            frame.render_widget(Paragraph::new(lines), inner);
+        }
+        MenuState::Settings => {
+            let width = area.width.saturating_sub(4).clamp(12, 44);
+            let dialog_area = centered_rect(width, 5, area);
+            let block = Block::default()
+                .title(" Settings ")
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(ACCENT));
+            let inner = block.inner(dialog_area);
+            frame.render_widget(Clear, dialog_area);
+            frame.render_widget(block, dialog_area);
+            frame.render_widget(
+                Paragraph::new(vec![
+                    Line::raw(format!("q {}", env!("CARGO_PKG_VERSION"))),
+                    Line::styled("No integrations yet.", dim()),
+                    Line::styled("Esc back", dim()),
+                ]),
+                inner,
+            );
+        }
+        MenuState::Workspaces(overlay) => render_workspaces_overlay(frame, overlay, cursor_on),
+    }
+}
+
+fn render_workspaces_overlay(frame: &mut Frame, overlay: &WorkspacesOverlay, cursor_on: bool) {
+    let area = frame.area();
+    let width = area.width.saturating_sub(4).clamp(12, 52);
+    let extra = 4
+        + u16::from(!overlay.error.is_empty())
+        + u16::from(matches!(overlay.mode, WorkspacesMode::Create { .. }));
+    let height = ((overlay.entries.len() as u16) + extra).min(area.height);
+    let dialog_area = centered_rect(width, height, area);
+    let block = Block::default()
+        .title(" Workspaces ")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(ACCENT));
+    let inner = block.inner(dialog_area);
+    frame.render_widget(Clear, dialog_area);
+    frame.render_widget(block, dialog_area);
+
+    let mut lines = Vec::new();
+    for (index, entry) in overlay.entries.iter().enumerate() {
+        let marker = if entry.current { "* " } else { "  " };
+        let style = if index == overlay.selected {
+            Style::default().add_modifier(Modifier::REVERSED)
+        } else {
+            Style::default()
+        };
+        lines.push(Line::styled(format!("{marker}{}", entry.name), style));
+    }
+    if let WorkspacesMode::Create { value } = &overlay.mode {
+        lines.push(Line::from(vec![
+            Span::styled("New name: ", dim()),
+            Span::raw(value.clone()),
+            Span::styled(
+                if cursor_on { "\u{2588}" } else { " " },
+                Style::default().fg(ACCENT),
+            ),
+        ]));
+    }
+    if !overlay.error.is_empty() {
+        lines.push(Line::styled(
+            overlay.error.clone(),
+            Style::default().fg(Color::Red),
+        ));
+    }
+    lines.push(Line::raw(""));
+    let hint = match overlay.mode {
+        WorkspacesMode::List => "Enter switch \u{b7} n new \u{b7} i info \u{b7} Esc back",
+        WorkspacesMode::Create { .. } => "Enter create \u{b7} Esc cancel",
+        WorkspacesMode::Info(_) => "Enter switch \u{b7} n new \u{b7} i info \u{b7} Esc back",
+    };
+    lines.push(Line::styled(hint, dim()));
+    frame.render_widget(Paragraph::new(lines), inner);
+
+    if let WorkspacesMode::Info(info) = &overlay.mode {
+        render_workspace_info(frame, overlay, info, cursor_on);
+    }
+}
+
+fn render_workspace_info(
+    frame: &mut Frame,
+    overlay: &WorkspacesOverlay,
+    info: &crate::app::WorkspaceInfo,
+    cursor_on: bool,
+) {
+    let Some(entry) = overlay.entries.get(overlay.selected) else {
+        return;
+    };
+    let area = frame.area();
+    let width = area.width.saturating_sub(6).clamp(12, 44);
+    let dialog_area = centered_rect(width, 8.min(area.height), area);
+    let block = Block::default()
+        .title(" Workspace ")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(ACCENT));
+    let inner = block.inner(dialog_area);
+    frame.render_widget(Clear, dialog_area);
+    frame.render_widget(block, dialog_area);
+
+    let mut lines = vec![
+        Line::from(vec![Span::styled("Name: ", dim()), Span::raw(&entry.name)]),
+        Line::from(vec![Span::styled("Kind: ", dim()), Span::raw("personal")]),
+        Line::raw(""),
+    ];
+    match &info.mode {
+        InfoMode::View => {
+            let actions = [
+                (InfoAction::Rename, " Rename"),
+                (InfoAction::Delete, " Delete"),
+            ];
+            for (action, label) in actions {
+                let style = if info.action == action {
+                    Style::default().add_modifier(Modifier::REVERSED)
+                } else {
+                    Style::default()
+                };
+                lines.push(Line::styled(label, style));
+            }
+            lines.push(Line::styled("Enter select \u{b7} Esc back", dim()));
+        }
+        InfoMode::Rename { value } => {
+            lines.push(Line::from(vec![
+                Span::styled("New name: ", dim()),
+                Span::raw(value.clone()),
+                Span::styled(
+                    if cursor_on { "\u{2588}" } else { " " },
+                    Style::default().fg(ACCENT),
+                ),
+            ]));
+            lines.push(Line::styled("Enter rename \u{b7} Esc cancel", dim()));
+        }
+        InfoMode::ConfirmDelete => {
+            lines.push(Line::styled(
+                format!("Delete '{}' and all its prompts?", entry.name),
+                Style::default().fg(Color::Red),
+            ));
+            lines.push(Line::styled("Enter delete \u{b7} Esc cancel", dim()));
+        }
+    }
+    frame.render_widget(Paragraph::new(lines), inner);
 }
 
 fn centered_rect(width: u16, height: u16, area: Rect) -> Rect {

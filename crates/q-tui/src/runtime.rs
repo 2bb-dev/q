@@ -1,4 +1,4 @@
-use crate::app::{App, EditorOrigin, Effect, QueueMutation};
+use crate::app::{App, EditorOrigin, Effect, MenuState, QueueMutation, WorkspaceEntry};
 use crate::reducer::reduce;
 use crate::render::draw;
 use crate::{Input, Pane};
@@ -16,7 +16,7 @@ use q_platform::clipboard::{Clipboard, SystemClipboard};
 use q_platform::lock::FileLock;
 use ratatui::{backend::CrosstermBackend, Terminal};
 use std::io::{self, Stdout};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 const BLINK_PERIOD_MS: u128 = 1000;
@@ -52,9 +52,10 @@ fn event_loop(
     workspace_dir: &Path,
 ) -> Result<()> {
     let start = Instant::now();
-    let mut sync = QueueSync::new(workspace_dir);
+    let mut workspace_dir = workspace_dir.to_path_buf();
+    let mut sync = QueueSync::new(&workspace_dir);
     loop {
-        sync.refresh_if_due(app, workspace_dir);
+        sync.refresh_if_due(app, &workspace_dir);
 
         let cursor_on = cursor_is_on(start.elapsed());
         term.draw(|f| draw(f, app, cursor_on))?;
@@ -66,7 +67,13 @@ fn event_loop(
 
         let batch_start = Instant::now();
         loop {
-            if handle_event(event::read()?, app, clipboard, workspace_dir)? {
+            if handle_event(
+                event::read()?,
+                app,
+                clipboard,
+                &mut workspace_dir,
+                &mut sync,
+            )? {
                 return Ok(());
             }
             if batch_start.elapsed() >= INPUT_BATCH_BUDGET || !event::poll(Duration::ZERO)? {
@@ -352,7 +359,8 @@ fn handle_event(
     event: Event,
     app: &mut App,
     clipboard: &mut dyn Clipboard,
-    workspace_dir: &Path,
+    workspace_dir: &mut PathBuf,
+    sync: &mut QueueSync,
 ) -> Result<bool> {
     let input = match event {
         Event::Key(key)
@@ -360,6 +368,12 @@ fn handle_event(
                 && app.editor.is_some() =>
         {
             map_editor_key(key)
+        }
+        Event::Key(key)
+            if matches!(key.kind, KeyEventKind::Press | KeyEventKind::Repeat)
+                && app.menu.is_some() =>
+        {
+            map_menu_key(key)
         }
         Event::Key(key)
             if matches!(key.kind, KeyEventKind::Press | KeyEventKind::Repeat)
@@ -461,6 +475,17 @@ fn handle_event(
         Some(Effect::Status(msg)) => {
             app.status = msg;
         }
+        Some(
+            effect @ (Effect::OpenWorkspacesOverlay
+            | Effect::SwitchWorkspace(_)
+            | Effect::CreateWorkspace(_)
+            | Effect::RenameWorkspace { .. }
+            | Effect::DeleteWorkspace(_)),
+        ) => {
+            if let Err(error) = handle_menu_effect(app, &effect, workspace_dir, sync) {
+                app.status = format!("workspace operation failed: {error}");
+            }
+        }
         None => {
             if !app.status.is_empty() {
                 app.status.clear();
@@ -468,6 +493,127 @@ fn handle_event(
         }
     }
     Ok(false)
+}
+
+fn workspaces_root(workspace_dir: &Path) -> PathBuf {
+    workspace_dir
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| workspace_dir.to_path_buf())
+}
+
+fn workspace_entries(workspace_dir: &Path) -> Result<Vec<WorkspaceEntry>> {
+    Ok(q_core::storage::list_dirs(&workspaces_root(workspace_dir))?
+        .into_iter()
+        .map(|(dir, meta)| WorkspaceEntry {
+            current: dir == workspace_dir,
+            dir,
+            name: meta.name,
+        })
+        .collect())
+}
+
+fn set_workspaces_error(app: &mut App, message: impl Into<String>) {
+    if let Some(MenuState::Workspaces(overlay)) = app.menu.as_mut() {
+        overlay.error = message.into();
+    }
+}
+
+fn validated_workspace_name(
+    app: &mut App,
+    workspace_dir: &Path,
+    name: &str,
+    renamed_dir: Option<&Path>,
+) -> Result<Option<String>> {
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
+        set_workspaces_error(app, "workspace name is empty");
+        return Ok(None);
+    }
+    let taken = workspace_entries(workspace_dir)?.into_iter().any(|entry| {
+        entry.name.to_lowercase() == trimmed.to_lowercase()
+            && Some(entry.dir.as_path()) != renamed_dir
+    });
+    if taken {
+        set_workspaces_error(app, format!("workspace name already exists: {trimmed}"));
+        return Ok(None);
+    }
+    Ok(Some(trimmed.to_string()))
+}
+
+fn switch_workspace(
+    app: &mut App,
+    workspace_dir: &mut PathBuf,
+    sync: &mut QueueSync,
+    dir: &Path,
+) -> Result<()> {
+    let workspace = q_core::storage::load_dir(dir)?;
+    let name = q_core::storage::read_meta(dir)?.name;
+    *workspace_dir = dir.to_path_buf();
+    app.replace_workspace(workspace);
+    app.menu = None;
+    app.status = format!("switched to workspace {name}");
+    *sync = QueueSync::new(workspace_dir);
+    Ok(())
+}
+
+fn handle_menu_effect(
+    app: &mut App,
+    effect: &Effect,
+    workspace_dir: &mut PathBuf,
+    sync: &mut QueueSync,
+) -> Result<()> {
+    match effect {
+        Effect::OpenWorkspacesOverlay => {
+            let entries = workspace_entries(workspace_dir)?;
+            app.open_workspaces(entries);
+        }
+        Effect::SwitchWorkspace(dir) => {
+            if dir == workspace_dir {
+                app.menu = None;
+                return Ok(());
+            }
+            switch_workspace(app, workspace_dir, sync, dir)?;
+        }
+        Effect::CreateWorkspace(name) => {
+            let Some(name) = validated_workspace_name(app, workspace_dir, name, None)? else {
+                return Ok(());
+            };
+            let dir = q_core::storage::init_dir(&workspaces_root(workspace_dir), &name)?;
+            switch_workspace(app, workspace_dir, sync, &dir)?;
+            app.status = format!("created workspace {name}");
+        }
+        Effect::RenameWorkspace { dir, name } => {
+            let Some(name) =
+                validated_workspace_name(app, workspace_dir, name, Some(dir.as_path()))?
+            else {
+                return Ok(());
+            };
+            q_core::storage::rename_dir(dir, &name)?;
+            let entries = workspace_entries(workspace_dir)?;
+            app.open_workspaces(entries);
+            app.status = format!("renamed workspace to {name}");
+        }
+        Effect::DeleteWorkspace(dir) => {
+            let entries = workspace_entries(workspace_dir)?;
+            if entries.len() <= 1 {
+                set_workspaces_error(app, "cannot delete the last workspace");
+                return Ok(());
+            }
+            let deleted_current = dir == workspace_dir;
+            std::fs::remove_dir_all(dir)?;
+            if deleted_current {
+                let remaining = workspace_entries(workspace_dir)?;
+                let fallback = remaining[0].dir.clone();
+                switch_workspace(app, workspace_dir, sync, &fallback)?;
+            }
+            let entries = workspace_entries(workspace_dir)?;
+            app.open_workspaces(entries);
+            app.status = "deleted workspace".to_string();
+        }
+        _ => {}
+    }
+    Ok(())
 }
 
 fn map_editor_key(key: KeyEvent) -> Option<Input> {
@@ -488,6 +634,25 @@ fn map_tab_menu_key(key: KeyEvent) -> Option<Input> {
         (KeyCode::Esc, _) => Some(Input::Esc),
         (KeyCode::Up, _) | (KeyCode::Char('k'), KeyModifiers::NONE) => Some(Input::Up),
         (KeyCode::Down, _) | (KeyCode::Char('j'), KeyModifiers::NONE) => Some(Input::Down),
+        _ => None,
+    }
+}
+
+fn map_menu_key(key: KeyEvent) -> Option<Input> {
+    let shift = key.modifiers.contains(KeyModifiers::SHIFT);
+    match (key.code, key.modifiers) {
+        (KeyCode::Char('c'), modifiers) if modifiers.contains(KeyModifiers::CONTROL) => {
+            Some(Input::Quit)
+        }
+        (KeyCode::Enter, _) => Some(Input::Enter),
+        (KeyCode::Esc, _) => Some(Input::Esc),
+        (KeyCode::Up, _) => Some(Input::Up),
+        (KeyCode::Down, _) => Some(Input::Down),
+        (KeyCode::Tab, _) => Some(Input::Tab),
+        (KeyCode::Backspace, _) => Some(Input::Backspace),
+        (KeyCode::Char(c), KeyModifiers::NONE | KeyModifiers::SHIFT) => {
+            Some(Input::Char(if shift { shifted_char(c) } else { c }))
+        }
         _ => None,
     }
 }
@@ -558,6 +723,9 @@ fn map_key(key: KeyEvent, focus: Pane, dialog_open: bool) -> Option<Input> {
     if super_key && key.code == KeyCode::Char('/') {
         return Some(Input::OpenSearch);
     }
+    if super_key && key.code == KeyCode::Char('i') {
+        return Some(Input::OpenMenu);
+    }
     if ctrl && key.code == KeyCode::Char('t') {
         return Some(Input::OpenCreateTab);
     }
@@ -585,6 +753,7 @@ fn map_key(key: KeyEvent, focus: Pane, dialog_open: bool) -> Option<Input> {
             (KeyCode::Char('['), KeyModifiers::NONE) => Some(Input::PreviousTab),
             (KeyCode::Char(']'), KeyModifiers::NONE) => Some(Input::NextTab),
             (KeyCode::Char('r'), KeyModifiers::NONE) => Some(Input::OpenRenameTab),
+            (KeyCode::Char('w'), KeyModifiers::NONE) => Some(Input::OpenMenu),
             (KeyCode::Char('/'), KeyModifiers::NONE) => Some(Input::OpenSearch),
             (KeyCode::Left, _) => Some(Input::PreviousTab),
             (KeyCode::Right, _) => Some(Input::NextTab),

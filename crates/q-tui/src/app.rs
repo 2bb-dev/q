@@ -48,6 +48,7 @@ pub enum Input {
     SelectPrompt(usize),
     SelectHistory(usize),
     OpenSearch,
+    OpenMenu,
     ForgetHistory,
     FocusComposer,
     OpenCreateTab,
@@ -106,6 +107,75 @@ pub enum Effect {
     SaveExternal,
     Quit,
     Status(String),
+    OpenWorkspacesOverlay,
+    SwitchWorkspace(PathBuf),
+    CreateWorkspace(String),
+    RenameWorkspace {
+        dir: PathBuf,
+        name: String,
+    },
+    DeleteWorkspace(PathBuf),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MenuItem {
+    Workspaces,
+    Settings,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorkspaceEntry {
+    pub dir: PathBuf,
+    pub name: String,
+    /// Whether this window is currently on this workspace.
+    pub current: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WorkspacesMode {
+    List,
+    Create { value: String },
+    Info(WorkspaceInfo),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InfoAction {
+    Rename,
+    Delete,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum InfoMode {
+    View,
+    Rename { value: String },
+    ConfirmDelete,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorkspaceInfo {
+    pub action: InfoAction,
+    pub mode: InfoMode,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorkspacesOverlay {
+    pub entries: Vec<WorkspaceEntry>,
+    pub selected: usize,
+    pub mode: WorkspacesMode,
+    pub error: String,
+}
+
+impl WorkspacesOverlay {
+    pub fn selected_entry(&self) -> Option<&WorkspaceEntry> {
+        self.entries.get(self.selected)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MenuState {
+    Root { selected: MenuItem },
+    Workspaces(WorkspacesOverlay),
+    Settings,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -431,6 +501,7 @@ pub struct App {
     pub delete_prompt_dialog: Option<DeletePromptDialog>,
     pub preview: Option<PromptPreview>,
     pub search: Option<SearchDialog>,
+    pub menu: Option<MenuState>,
     pub editor: Option<FullScreenEditor>,
     pub status: String,
     pub(crate) tab_hits: Vec<TabHit>,
@@ -464,6 +535,7 @@ impl App {
             delete_prompt_dialog: None,
             preview: None,
             search: None,
+            menu: None,
             editor: None,
             status: String::new(),
             tab_hits: Vec::new(),
@@ -796,7 +868,20 @@ impl App {
             || self.tab_menu.is_some()
             || self.search.is_some()
             || self.preview.is_some()
+            || self.menu.is_some()
             || self.editor.is_some()
+    }
+
+    /// Opens the workspaces overlay with the current entries, selecting the
+    /// workspace this window is on.
+    pub fn open_workspaces(&mut self, entries: Vec<WorkspaceEntry>) {
+        let selected = entries.iter().position(|entry| entry.current).unwrap_or(0);
+        self.menu = Some(MenuState::Workspaces(WorkspacesOverlay {
+            entries,
+            selected,
+            mode: WorkspacesMode::List,
+            error: String::new(),
+        }));
     }
 }
 
