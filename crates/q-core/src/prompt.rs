@@ -118,7 +118,9 @@ fn validate_external_path(path: &Path) -> Result<()> {
 pub struct Prompt {
     pub id: PromptId,
     source: PromptSource,
-    pub pinned: bool,
+    /// When the prompt was pinned; `None` means unpinned.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pinned_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
 }
 
@@ -138,9 +140,23 @@ impl Prompt {
         Ok(Prompt {
             id: PromptId::new(),
             source,
-            pinned: false,
+            pinned_at: None,
             created_at: Utc::now(),
         })
+    }
+
+    pub fn pinned(&self) -> bool {
+        self.pinned_at.is_some()
+    }
+
+    /// Pins or unpins the prompt. Pinning an already pinned prompt keeps the
+    /// original pin time.
+    pub fn set_pinned(&mut self, pinned: bool) {
+        match (pinned, self.pinned_at) {
+            (true, None) => self.pinned_at = Some(Utc::now()),
+            (false, Some(_)) => self.pinned_at = None,
+            _ => {}
+        }
     }
 
     pub fn source(&self) -> &PromptSource {

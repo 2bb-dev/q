@@ -652,7 +652,7 @@ impl App {
                     .workspace
                     .get_prompt(id)
                     .ok_or_else(|| "prompt is no longer available".to_string())?
-                    .pinned;
+                    .pinned();
                 self.editor = Some(FullScreenEditor::inline(id, &text, expected_pinned));
             }
             PromptSource::ExternalMarkdown { path } => {

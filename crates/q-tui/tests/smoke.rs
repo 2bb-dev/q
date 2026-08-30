@@ -34,7 +34,7 @@ fn end_to_end_reducer_flow() {
             pinned: true,
         }))
     );
-    assert!(app.visible_prompts()[0].pinned);
+    assert!(app.visible_prompts()[0].pinned());
 
     // Copy+pop the unpinned "second".
     reduce(&mut app, Input::Down);

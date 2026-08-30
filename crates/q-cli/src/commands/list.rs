@@ -23,7 +23,7 @@ impl<'a> PromptOutput<'a> {
             text: resolved.text,
             source: resolved.source,
             available: resolved.available,
-            pinned: prompt.pinned,
+            pinned: prompt.pinned(),
             created_at: prompt.created_at,
         }
     }
@@ -46,7 +46,7 @@ pub fn run(json: bool, tab: Option<String>) -> Result<()> {
             return Ok(());
         }
         for prompt in queue.iter() {
-            let marker = if prompt.pinned { "[P]" } else { "   " };
+            let marker = if prompt.pinned() { "[P]" } else { "   " };
             let preview = match source::read(prompt.source()) {
                 Ok(text) => preview(&text),
                 Err(error) => error.to_string(),

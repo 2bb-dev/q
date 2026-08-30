@@ -23,7 +23,7 @@ fn pinned_prompts_sort_before_unpinned() {
     q.add(p("one"));
     q.add(p("two"));
     let mut pinned = p("zero");
-    pinned.pinned = true;
+    pinned.set_pinned(true);
     q.add(pinned);
     let texts: Vec<_> = q.iter().map(|p| p.inline_text().unwrap()).collect();
     assert_eq!(texts, vec!["zero", "two", "one"]);
@@ -57,7 +57,7 @@ fn edit_rejects_empty() {
 fn inline_edit_preserves_prompt_identity_and_metadata() {
     let mut queue = Queue::new();
     let mut prompt = p("old");
-    prompt.pinned = true;
+    prompt.set_pinned(true);
     let id = prompt.id;
     let created_at = prompt.created_at;
     queue.add(prompt);
@@ -67,7 +67,7 @@ fn inline_edit_preserves_prompt_identity_and_metadata() {
     let edited = queue.get(id).unwrap();
     assert_eq!(edited.id, id);
     assert_eq!(edited.created_at, created_at);
-    assert!(edited.pinned);
+    assert!(edited.pinned());
     assert_eq!(edited.inline_text(), Some("new"));
 }
 
@@ -99,7 +99,7 @@ fn set_pinned_true_moves_to_pinned_section() {
 fn pop_next_unpinned_skips_pinned_head() {
     let mut q = Queue::new();
     let mut pinned = p("stay");
-    pinned.pinned = true;
+    pinned.set_pinned(true);
     q.add(pinned);
     q.add(p("go"));
     let popped = q.pop_next_unpinned().unwrap();
@@ -111,7 +111,7 @@ fn pop_next_unpinned_skips_pinned_head() {
 fn pop_next_unpinned_returns_none_when_only_pinned() {
     let mut q = Queue::new();
     let mut pinned = p("only");
-    pinned.pinned = true;
+    pinned.set_pinned(true);
     q.add(pinned);
     assert!(q.pop_next_unpinned().is_none());
 }
@@ -152,9 +152,9 @@ fn iter_pinned_only_yields_pinned() {
     let mut q = Queue::new();
     q.add(p("unpinned-a"));
     let mut pin1 = p("pinned-1");
-    pin1.pinned = true;
+    pin1.set_pinned(true);
     let mut pin2 = p("pinned-2");
-    pin2.pinned = true;
+    pin2.set_pinned(true);
     q.add(pin1);
     q.add(pin2);
     q.add(p("unpinned-b"));
@@ -170,7 +170,7 @@ fn iter_unpinned_only_yields_unpinned() {
     q.add(p("unpinned-a"));
     q.add(p("unpinned-b"));
     let mut pin = p("pinned-1");
-    pin.pinned = true;
+    pin.set_pinned(true);
     q.add(pin);
     let unpinned: Vec<_> = q
         .iter_unpinned()
@@ -226,7 +226,7 @@ fn move_within_group_clamps_at_boundary() {
 fn move_within_group_cannot_cross_into_other_group() {
     let mut q = Queue::new();
     let mut pin = p("pinned");
-    pin.pinned = true;
+    pin.set_pinned(true);
     let pin_id = q.add(pin);
     q.add_text("unpin-first").unwrap();
     let unpinned_head_id = q.add_text("unpin-second").unwrap();
@@ -235,8 +235,8 @@ fn move_within_group_cannot_cross_into_other_group() {
     // Moving first unpinned up by 5 — clamps to unpinned-group head, no change
     assert!(!q.move_within_group(unpinned_head_id, -5).unwrap());
     // Invariant: pinned still first
-    assert!(q.prompts[0].pinned);
-    assert!(!q.prompts[1].pinned);
+    assert!(q.prompts[0].pinned());
+    assert!(!q.prompts[1].pinned());
 }
 
 #[test]

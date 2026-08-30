@@ -462,7 +462,7 @@ fn reduce_queue(app: &mut App, input: Input) -> Option<Effect> {
                 Ok(text) => text,
                 Err(error) => return Some(Effect::Status(error)),
             };
-            if prompt.pinned {
+            if prompt.pinned() {
                 Some(Effect::CopyToClipboard(text))
             } else {
                 let expected_external_content = prompt
@@ -474,7 +474,7 @@ fn reduce_queue(app: &mut App, input: Input) -> Option<Effect> {
                     mutation: QueueMutation::Remove {
                         id: prompt.id,
                         expected_source: prompt.source().clone(),
-                        expected_pinned: prompt.pinned,
+                        expected_pinned: prompt.pinned(),
                         expected_external_content,
                     },
                 })
@@ -483,7 +483,7 @@ fn reduce_queue(app: &mut App, input: Input) -> Option<Effect> {
         Input::Char('p') => {
             let prompt = app.selected_prompt()?.clone();
             app.workspace
-                .set_prompt_pinned(prompt.id, !prompt.pinned)
+                .set_prompt_pinned(prompt.id, !prompt.pinned())
                 .ok()?;
             app.selected = app
                 .visible_prompts()
@@ -491,7 +491,7 @@ fn reduce_queue(app: &mut App, input: Input) -> Option<Effect> {
                 .position(|candidate| candidate.id == prompt.id);
             Some(Effect::Persist(QueueMutation::SetPinned {
                 id: prompt.id,
-                pinned: !prompt.pinned,
+                pinned: !prompt.pinned(),
             }))
         }
         Input::Char('f') => {
@@ -515,7 +515,7 @@ fn reduce_queue(app: &mut App, input: Input) -> Option<Effect> {
             app.delete_prompt_dialog = Some(DeletePromptDialog {
                 prompt_id: prompt.id,
                 expected_source: prompt.source().clone(),
-                expected_pinned: prompt.pinned,
+                expected_pinned: prompt.pinned(),
             });
             None
         }

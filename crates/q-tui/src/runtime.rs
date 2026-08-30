@@ -29,8 +29,8 @@ const KEYBOARD_ENHANCEMENTS: KeyboardEnhancementFlags =
         .union(KeyboardEnhancementFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES)
         .union(KeyboardEnhancementFlags::REPORT_ALTERNATE_KEYS);
 
-pub fn run(queue_path: &Path) -> Result<()> {
-    let queue = q_core::storage::load(queue_path)?;
+pub fn run(workspace_dir: &Path) -> Result<()> {
+    let queue = q_core::storage::load_dir(workspace_dir)?;
     let mut app = App::new(queue);
     let mut clipboard = SystemClipboard::new()?;
 
@@ -39,7 +39,7 @@ pub fn run(queue_path: &Path) -> Result<()> {
         terminal.terminal_mut(),
         &mut app,
         &mut clipboard,
-        queue_path,
+        workspace_dir,
     );
     let restore_result = terminal.restore();
     result.and(restore_result)
@@ -49,12 +49,12 @@ fn event_loop(
     term: &mut Terminal<CrosstermBackend<Stdout>>,
     app: &mut App,
     clipboard: &mut dyn Clipboard,
-    queue_path: &Path,
+    workspace_dir: &Path,
 ) -> Result<()> {
     let start = Instant::now();
-    let mut sync = QueueSync::new(queue_path);
+    let mut sync = QueueSync::new(workspace_dir);
     loop {
-        sync.refresh_if_due(app, queue_path);
+        sync.refresh_if_due(app, workspace_dir);
 
         let cursor_on = cursor_is_on(start.elapsed());
         term.draw(|f| draw(f, app, cursor_on))?;
@@ -66,7 +66,7 @@ fn event_loop(
 
         let batch_start = Instant::now();
         loop {
-            if handle_event(event::read()?, app, clipboard, queue_path)? {
+            if handle_event(event::read()?, app, clipboard, workspace_dir)? {
                 return Ok(());
             }
             if batch_start.elapsed() >= INPUT_BATCH_BUDGET || !event::poll(Duration::ZERO)? {
@@ -91,16 +91,18 @@ fn blink_timeout(elapsed: Duration) -> Duration {
 }
 
 struct QueueSync {
-    fingerprint: Option<q_core::storage::FileFingerprint>,
+    fingerprint: Option<q_core::storage::DirFingerprint>,
     last_check: Instant,
     last_reload: Instant,
 }
 
 impl QueueSync {
-    fn new(queue_path: &Path) -> Self {
+    fn new(workspace_dir: &Path) -> Self {
         let now = Instant::now();
         Self {
-            fingerprint: q_core::storage::fingerprint(queue_path).ok().flatten(),
+            fingerprint: q_core::storage::fingerprint_dir(workspace_dir)
+                .ok()
+                .flatten(),
             last_check: now,
             last_reload: now - FULL_RELOAD_INTERVAL,
         }
@@ -110,7 +112,7 @@ impl QueueSync {
         SYNC_INTERVAL.saturating_sub(self.last_check.elapsed())
     }
 
-    fn refresh_if_due(&mut self, app: &mut App, queue_path: &Path) {
+    fn refresh_if_due(&mut self, app: &mut App, workspace_dir: &Path) {
         if self.last_check.elapsed() < SYNC_INTERVAL {
             return;
         }
@@ -125,7 +127,7 @@ impl QueueSync {
             app.refresh_external_content();
         }
 
-        let fingerprint = match q_core::storage::fingerprint(queue_path) {
+        let fingerprint = match q_core::storage::fingerprint_dir(workspace_dir) {
             Ok(fingerprint) => fingerprint,
             Err(error) => {
                 app.status = format!("sync failed: {error}");
@@ -136,7 +138,7 @@ impl QueueSync {
             return;
         }
 
-        match q_core::storage::load(queue_path) {
+        match q_core::storage::load_dir(workspace_dir) {
             Ok(workspace) => {
                 app.replace_workspace(workspace);
                 self.fingerprint = fingerprint;
@@ -152,7 +154,7 @@ enum MutationOutcome {
     Rejected(q_core::Workspace, String),
 }
 
-fn commit_mutation(queue_path: &Path, mutation: &QueueMutation) -> Result<MutationOutcome> {
+fn commit_mutation(workspace_dir: &Path, mutation: &QueueMutation) -> Result<MutationOutcome> {
     let document_lock_path = match mutation {
         QueueMutation::Remove {
             expected_source: q_core::PromptSource::ExternalMarkdown { path },
@@ -169,9 +171,9 @@ fn commit_mutation(queue_path: &Path, mutation: &QueueMutation) -> Result<Mutati
         Some(lock) => Some(lock.write()?),
         None => None,
     };
-    let mut lock = FileLock::open(&queue_path.with_extension("lock"))?;
+    let mut lock = FileLock::open(&workspace_dir.join(".lock"))?;
     let _guard = lock.write()?;
-    let mut workspace = q_core::storage::load(queue_path)?;
+    let mut workspace = q_core::storage::load_dir(workspace_dir)?;
 
     let result = match mutation {
         QueueMutation::Add { tab_id, prompt } => {
@@ -211,7 +213,7 @@ fn commit_mutation(queue_path: &Path, mutation: &QueueMutation) -> Result<Mutati
         return Ok(MutationOutcome::Rejected(workspace, error.to_string()));
     }
 
-    q_core::storage::save(queue_path, &workspace)?;
+    q_core::storage::save_dir(workspace_dir, &workspace)?;
     Ok(MutationOutcome::Committed(workspace))
 }
 
@@ -224,7 +226,7 @@ fn verify_prompt_state(
     let prompt = workspace
         .get_prompt(id)
         .ok_or_else(|| q_core::CoreError::NotFound(id.to_string()))?;
-    if prompt.source() != expected_source || prompt.pinned != expected_pinned {
+    if prompt.source() != expected_source || prompt.pinned() != expected_pinned {
         return Err(q_core::CoreError::Invalid(
             "prompt changed in another window; retry the operation".to_string(),
         ));
@@ -254,8 +256,8 @@ fn verify_external_content(
     Ok(())
 }
 
-fn persist_mutation(app: &mut App, queue_path: &Path, mutation: &QueueMutation) -> Result<bool> {
-    match commit_mutation(queue_path, mutation)? {
+fn persist_mutation(app: &mut App, workspace_dir: &Path, mutation: &QueueMutation) -> Result<bool> {
+    match commit_mutation(workspace_dir, mutation)? {
         MutationOutcome::Committed(workspace) => {
             let close_editor = match mutation {
                 QueueMutation::EditInline { id, .. } => {
@@ -298,7 +300,7 @@ fn persist_mutation(app: &mut App, queue_path: &Path, mutation: &QueueMutation) 
     }
 }
 
-fn save_external_editor(app: &mut App, _queue_path: &Path) -> bool {
+fn save_external_editor(app: &mut App, _workspace_dir: &Path) -> bool {
     let result: Result<()> = (|| {
         let source_path = match &app
             .editor
@@ -350,7 +352,7 @@ fn handle_event(
     event: Event,
     app: &mut App,
     clipboard: &mut dyn Clipboard,
-    queue_path: &Path,
+    workspace_dir: &Path,
 ) -> Result<bool> {
     let input = match event {
         Event::Key(key)
@@ -432,7 +434,7 @@ fn handle_event(
             Err(error) => app.status = format!("clipboard failed: {error}"),
         },
         Some(Effect::CopyAndPersist { text, mutation }) => match clipboard.set_text(&text) {
-            Ok(()) => match persist_mutation(app, queue_path, &mutation) {
+            Ok(()) => match persist_mutation(app, workspace_dir, &mutation) {
                 Ok(true) => app.status = format!("copied {} chars", text.chars().count()),
                 Ok(false) => {}
                 Err(error) => {
@@ -441,7 +443,7 @@ fn handle_event(
             },
             Err(error) => app.status = format!("clipboard failed: {error}"),
         },
-        Some(Effect::Persist(mutation)) => match persist_mutation(app, queue_path, &mutation) {
+        Some(Effect::Persist(mutation)) => match persist_mutation(app, workspace_dir, &mutation) {
             Ok(true) => app.status.clear(),
             Ok(false) => {}
             Err(error) if matches!(mutation, QueueMutation::EditInline { .. }) => {
@@ -454,7 +456,7 @@ fn handle_event(
             Err(error) => return Err(error),
         },
         Some(Effect::SaveExternal) => {
-            save_external_editor(app, queue_path);
+            save_external_editor(app, workspace_dir);
         }
         Some(Effect::Status(msg)) => {
             app.status = msg;

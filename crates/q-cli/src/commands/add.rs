@@ -21,7 +21,7 @@ pub fn run(text: Option<String>, literal: bool, pin: bool, tab: &str) -> Result<
             Prompt::new(text)?
         }
     };
-    prompt.pinned = pin;
+    prompt.set_pinned(pin);
 
     let id = with_workspace_mut(|workspace| {
         let tab_id = workspace.resolve_tab(tab)?;

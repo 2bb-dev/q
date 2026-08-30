@@ -131,7 +131,7 @@ fn p_pins_selected_prompt() {
             pinned: true
         }))
     );
-    assert!(app.selected_prompt().unwrap().pinned);
+    assert!(app.selected_prompt().unwrap().pinned());
 }
 
 #[test]
@@ -431,7 +431,7 @@ fn search_swallows_queue_shortcuts() {
 
     assert_eq!(reduce(&mut app, Input::Char('p')), None);
 
-    assert!(!app.visible_prompts()[0].pinned);
+    assert!(!app.visible_prompts()[0].pinned());
     assert_eq!(app.search.as_ref().unwrap().query, "p");
 }
 
@@ -443,7 +443,7 @@ fn preview_swallows_queue_shortcuts() {
     assert_eq!(reduce(&mut app, Input::Char('p')), None);
     assert_eq!(reduce(&mut app, Input::Char('e')), None);
 
-    assert!(!app.visible_prompts()[0].pinned);
+    assert!(!app.visible_prompts()[0].pinned());
     assert_eq!(app.composer.text(), "");
     assert_eq!(app.focus, Pane::Queue);
 }
