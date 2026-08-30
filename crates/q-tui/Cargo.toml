@@ -11,6 +11,8 @@ ratatui = { workspace = true }
 ratatui-textarea = { workspace = true }
 crossterm = { workspace = true }
 chrono = { workspace = true }
+unicode-segmentation = { workspace = true }
+unicode-width = { workspace = true }
 q-core = { path = "../q-core" }
 q-platform = { path = "../q-platform" }
 

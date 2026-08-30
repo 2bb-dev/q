@@ -1,25 +1,45 @@
 use std::io::Read;
+use std::path::Path;
 
 use anyhow::Result;
 use q_core::Prompt;
+use q_platform::external_document::{absolute_path, read_utf8};
 
 use super::with_workspace_mut;
 
-pub fn run(text: Option<String>, pin: bool, tab: Option<String>) -> Result<()> {
-    let text = match text {
-        Some(t) => t,
+pub fn run(text: Option<String>, literal: bool, pin: bool, tab: &str) -> Result<()> {
+    let mut prompt = match text {
+        Some(text) if !literal && is_markdown_path(&text) => {
+            let path = absolute_path(Path::new(&text))?;
+            let _ = read_utf8(&path)?;
+            Prompt::from_external_markdown(path)?
+        }
+        Some(text) => Prompt::new(text)?,
         None => {
-            let mut buf = String::new();
-            std::io::stdin().read_to_string(&mut buf)?;
-            buf
+            let mut text = String::new();
+            std::io::stdin().read_to_string(&mut text)?;
+            Prompt::new(text)?
         }
     };
+    prompt.pinned = pin;
+
     let id = with_workspace_mut(|workspace| {
-        let tab_id = workspace.resolve_context_tab(tab.as_deref())?;
-        let mut prompt = Prompt::new(text)?;
-        prompt.pinned = pin;
+        let tab_id = workspace.resolve_tab(tab)?;
         Ok(workspace.add_prompt(tab_id, prompt)?)
     })?;
     println!("added {id}");
     Ok(())
 }
+
+fn is_markdown_path(value: &str) -> bool {
+    Path::new(value)
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| {
+            extension.eq_ignore_ascii_case("md") || extension.eq_ignore_ascii_case("markdown")
+        })
+}
+
+#[cfg(test)]
+#[path = "../../tests/unit/commands/add.rs"]
+mod tests;

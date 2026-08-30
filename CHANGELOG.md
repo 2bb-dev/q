@@ -5,8 +5,9 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Changed
-- **Breaking:** bumped the `queue.json` schema from 2 to 3 to store prompt history. Existing files are migrated automatically on load, seeding history from the prompts currently queued, but once a 0.2 binary saves the file, `q` 0.1.0 will refuse to read it with `unsupported schema: 3`. Back up `queue.json` before upgrading if you still need to run an older binary against it
-- Collapsed queue rows to at most three lines of condensed text, marking longer prompts with a trailing ellipsis
+- **Breaking:** bumped the `queue.json` schema to 4 for typed inline and external Markdown sources. Schemas 1–3 migrate automatically on load, but older binaries cannot read the workspace after it is next saved
+- **Breaking:** required `--tab <name>` for every `q add`, including workspaces with only one tab
+- Changed queue cards to show only the first source line, truncating long lines with a trailing ellipsis
 - Aligned the footer hints with the composer prompt marker
 - Moved every unit test out of `src/` into `crates/<pkg>/tests/unit/`, attached to its module with `#[cfg(test)] #[path = ...] mod tests;`
 
@@ -14,6 +15,9 @@ All notable changes to this project will be documented in this file.
 - Removed the composer placeholder text
 
 ### Added
+- Added live `.md` and `.markdown` references through `q add --tab <name> <path>`, including current-content copy, pop, preview, history search, availability-aware JSON, and `--text` for literal Markdown-looking input
+- Added a built-in full-screen editor for inline prompts and referenced Markdown files, with identity-preserving inline edits, format-preserving atomic file saves, external-change conflict detection, and safe unsaved-buffer handling
+- Added `q remove <ID>` and confirmed TUI deletion to discard queue records without copying or deleting referenced files
 - Added a scrollable full-text preview for the selected prompt, opened with `f` in the queue pane (`↑↓`/`j`/`k`, `PgUp`/`PgDn`, `g`/`G` and the mouse wheel scroll, `Enter` copies, `Esc` closes)
 - Added searchable prompt history that keeps every prompt ever added, including popped prompts and prompts from closed tabs, capped at the 500 most recent entries and 256 KiB of prompt text
 - Added ways to forget remembered prompts: `^d` on the selected entry in the TUI history search, `q history --forget <text>` to drop everything matching a term, and `q history --clear` to forget all of it

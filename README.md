@@ -18,6 +18,8 @@
 - **Pop-on-Copy** -- Copy the newest prompt to your clipboard and remove it from its queue in one step.
 - **Pinning** -- Keep frequently used prompts at the top. Pinned prompts copy without popping.
 - **Prompt history** -- Every prompt you add is remembered, even after it is popped or its tab is closed. Search it with `Cmd+/` (or `/` in the queue pane) and from the CLI with `q history`. Forget entries you would rather not keep with `^d` in the search overlay, `q history --forget <text>`, or `q history --clear`.
+- **Live Markdown references** -- Queue `.md` and `.markdown` files without copying them. Copy, pop, preview, history, and search use the file's current contents.
+- **Built-in editor** -- Press `e` to edit inline prompts or referenced Markdown files in a full-screen editor with conflict-safe saves.
 - **Search in any language** -- Queries are transliterated to ASCII, so `uluchshit` finds `улучшить`, `cafe` finds `café`, and case, accents, and Unicode composition forms are all ignored.
 - **Native mouse** -- Every TUI surface is clickable: tabs, prompts, the composer, right-click tab menus, and history search results, with wheel scrolling throughout.
 - **Pipe-friendly** -- Read from stdin, write to stdout, and emit JSON.
@@ -40,6 +42,32 @@ curl --proto '=https' --tlsv1.2 -LsSf https://raw.githubusercontent.com/2bb-dev/
 
 Verify the installation with `q --version`.
 
+## CLI examples
+
+Every CLI add names its destination tab explicitly:
+
+```bash
+q add --tab 1 "review this patch"
+q add --tab research ./notes.md
+printf 'multiline prompt\n' | q add --tab research
+```
+
+A `.md` or `.markdown` positional argument is stored as a live external reference. Use `--text` to queue a Markdown-looking value literally:
+
+```bash
+q add --tab 1 --text "notes.md"
+```
+
+Copy reads without removing, pop reads and removes the queue item, and remove discards an item without reading it:
+
+```bash
+q copy --next --stdout --tab research
+q pop --next --stdout --tab research
+q remove <ID>
+```
+
+`q remove` never deletes an external file.
+
 ## Data
 
 `q` stores its workspace in `queue.json` under the operating system's application-data directory for `q-cli`. Set `QCLI_APP_DIR` to use a custom directory:
@@ -48,7 +76,11 @@ Verify the installation with `q --version`.
 QCLI_APP_DIR="$HOME/.q" q
 ```
 
-Back up `queue.json` to preserve all tabs and prompts. Closing a tab permanently deletes the prompts in that tab, but their text stays searchable in the prompt history, which keeps the 500 most recent prompts within a 256 KiB budget. Because history outlives the queue, popping a prompt or closing a tab no longer erases its text -- use `q history --forget <text>` or `q history --clear` for that.
+Back up `queue.json` to preserve all tabs, inline prompts, and external-file references. Referenced Markdown files remain at their absolute paths and are not included in this backup. Moving or deleting one leaves a removable broken reference.
+
+Closing a tab permanently deletes its queued items, but their sources stay searchable in prompt history, which keeps the 500 most recent sources around a 256 KiB target budget. Inline history retains text; external-file history retains a live path rather than a content snapshot. Use `q history --forget <text>` or `q history --clear` to remove history entries.
+
+The built-in editor serializes `q` saves targeting the same resolved file and rejects observed content, file-identity (where exposed by the platform), or permission changes. Operating systems do not provide a portable atomic compare-and-replace against non-cooperating editors, so avoid saving the same Markdown file from another program at exactly the same time as `q`.
 
 ## Contributing
 

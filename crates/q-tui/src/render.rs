@@ -1,5 +1,5 @@
 use crate::app::{
-    App, Pane, PromptHit, SearchHit, TabHit, TabHitTarget, TabMenuAction, TabMenuHit,
+    App, EditorOrigin, Pane, PromptHit, SearchHit, TabHit, TabHitTarget, TabMenuAction, TabMenuHit,
 };
 use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
@@ -8,15 +8,20 @@ use ratatui::{
     widgets::{Block, Borders, Clear, Paragraph},
     Frame,
 };
+use unicode_segmentation::UnicodeSegmentation;
+use unicode_width::UnicodeWidthStr;
 
 const ACCENT: Color = Color::Cyan;
 const MUTED: Color = Color::DarkGray;
 const TAB_BAR_BG: Color = Color::Rgb(32, 32, 32);
 const CREATE_WIDTH: u16 = 3;
 const BULLET_WIDTH: usize = 3;
-const COLLAPSED_ROWS: usize = 3;
 
 pub fn draw(frame: &mut Frame, app: &mut App, cursor_on: bool) {
+    if app.editor.is_some() {
+        render_editor(frame, app, cursor_on);
+        return;
+    }
     let area = frame.area();
     let composer_height = composer_height(app.composer.lines(), area.width, area.height);
     let outer = Layout::default()
@@ -48,6 +53,7 @@ pub fn draw(frame: &mut Frame, app: &mut App, cursor_on: bool) {
     render_tab_menu(frame, app);
     render_tab_dialog(frame, app, cursor_on);
     render_close_tab_dialog(frame, app);
+    render_delete_prompt_dialog(frame, app);
 }
 
 fn composer_height(lines: &[String], term_width: u16, term_height: u16) -> u16 {
@@ -55,8 +61,8 @@ fn composer_height(lines: &[String], term_width: u16, term_height: u16) -> u16 {
     let total: usize = lines
         .iter()
         .map(|line| {
-            let len = line.chars().count() + 1;
-            len.div_ceil(wrap_width).max(1)
+            let width = UnicodeWidthStr::width(line.as_str()) + 1;
+            width.div_ceil(wrap_width).max(1)
         })
         .sum();
     let max_height = (term_height as usize).saturating_sub(9).max(1);
@@ -88,7 +94,7 @@ fn render_tabs(frame: &mut Frame, app: &mut App, area: Rect) {
 
     let widths: Vec<u16> = tabs
         .iter()
-        .map(|(_, name)| ((name.chars().count() + 2) as u16).min(available.max(1)))
+        .map(|(_, name)| ((UnicodeWidthStr::width(name.as_str()) + 2) as u16).min(available.max(1)))
         .collect();
     let mut start = active_index;
     let mut end = active_index + 1;
@@ -116,7 +122,7 @@ fn render_tabs(frame: &mut Frame, app: &mut App, area: Rect) {
         let tab_area = Rect::new(x, area.y, width, 1);
         let (id, name) = &tabs[index];
         let inner_width = width.saturating_sub(2) as usize;
-        let clipped: String = name.chars().take(inner_width).collect();
+        let clipped = take_display_width(name, inner_width);
         let style = if *id == app.active_tab_id {
             Style::default()
                 .fg(Color::Black)
@@ -155,17 +161,21 @@ fn render_tabs(frame: &mut Frame, app: &mut App, area: Rect) {
 fn render_queue(frame: &mut Frame, app: &mut App, area: Rect) {
     app.prompt_hits.clear();
     let focused = app.focus == Pane::Queue && !app.overlay_open();
-    let prompts = app.visible_prompts();
+    let prompts: Vec<_> = app
+        .visible_prompts()
+        .into_iter()
+        .map(|prompt| (app.source_card_text(prompt.source()), prompt.pinned))
+        .collect();
     let mut lines = Vec::new();
     let mut hits = Vec::new();
     let mut visual_row = 0;
 
-    for (index, prompt) in prompts.iter().enumerate() {
+    for (index, (text, pinned)) in prompts.iter().enumerate() {
         if index > 0 {
             lines.push(Line::raw(""));
             visual_row += 1;
         }
-        let rows = collapsed_rows(&prompt.text, area.width);
+        let rows = collapsed_rows(text, area.width);
         let row_height = if area.width == 0 {
             0
         } else {
@@ -183,31 +193,22 @@ fn render_queue(frame: &mut Frame, app: &mut App, area: Rect) {
             });
         }
         visual_row = visual_row.saturating_add(row_height);
-        lines.extend(row_lines(rows, index, app.selected, focused, prompt.pinned));
+        lines.extend(row_lines(rows, index, app.selected, focused, *pinned));
     }
     app.prompt_hits = hits;
     frame.render_widget(Paragraph::new(lines), area);
 }
 
 fn collapsed_rows(text: &str, width: u16) -> Vec<String> {
-    let inner_width = (width as usize).saturating_sub(BULLET_WIDTH + 1).max(1);
-    let condensed = text.split_whitespace().collect::<Vec<_>>().join(" ");
-    let mut rows: Vec<String> = wrap_lines(&condensed, inner_width)
-        .into_iter()
-        .map(|row| row.trim_end().to_string())
-        .collect();
-    if rows.len() > COLLAPSED_ROWS {
-        rows.truncate(COLLAPSED_ROWS);
-        if let Some(last) = rows.last_mut() {
-            let mut chars: Vec<char> = last.chars().collect();
-            while chars.len() + 1 > inner_width {
-                chars.pop();
-            }
-            chars.push('…');
-            *last = chars.into_iter().collect();
-        }
+    let inner_width = (width as usize).saturating_sub(BULLET_WIDTH + 2).max(1);
+    let first_line = text.lines().next().unwrap_or("").trim_end();
+    if UnicodeWidthStr::width(first_line) <= inner_width {
+        return vec![first_line.to_string()];
     }
-    rows
+
+    let mut truncated = take_display_width(first_line, inner_width.saturating_sub(1));
+    truncated.push('…');
+    vec![truncated]
 }
 
 fn row_lines(
@@ -277,7 +278,7 @@ fn render_composer(frame: &mut Frame, app: &mut App, cursor_on: bool, area: Rect
 
 fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
     let hints = if app.status.is_empty() {
-        "p pin  ·  e edit  ·  f open  ·  ⌘/ history  ·  tab switch"
+        "p pin  ·  d delete  ·  e edit  ·  f open  ·  ⌘/ history  ·  tab switch"
     } else {
         app.status.as_str()
     };
@@ -337,7 +338,17 @@ fn render_search(frame: &mut Frame, app: &mut App, cursor_on: bool, area: Rect) 
     let results: Vec<String> = app
         .search_results()
         .iter()
-        .map(|entry| condense(&entry.text, list_area.width.saturating_sub(2) as usize))
+        .map(|entry| {
+            let text = match entry.external_markdown_path() {
+                Some(path) => format!(
+                    "{}  {}",
+                    path.display(),
+                    app.source_card_text(entry.source())
+                ),
+                None => app.source_card_text(entry.source()),
+            };
+            condense(&text, list_area.width.saturating_sub(2) as usize)
+        })
         .collect();
     if results.is_empty() {
         frame.render_widget(
@@ -378,30 +389,35 @@ fn render_search(frame: &mut Frame, app: &mut App, cursor_on: bool, area: Rect) 
 
 fn condense(text: &str, width: usize) -> String {
     let condensed = text.split_whitespace().collect::<Vec<_>>().join(" ");
-    if condensed.chars().count() <= width.max(1) {
+    let width = width.max(1);
+    if UnicodeWidthStr::width(condensed.as_str()) <= width {
         return condensed;
     }
-    let mut clipped: String = condensed
-        .chars()
-        .take(width.max(1).saturating_sub(1))
-        .collect();
+    let mut clipped = take_display_width(&condensed, width.saturating_sub(1));
     clipped.push('…');
     clipped
 }
 
 fn render_preview(frame: &mut Frame, app: &mut App, preview_area: Rect) {
-    let Some((text, scroll)) = app
-        .preview_text()
-        .zip(app.preview.as_ref().map(|preview| preview.scroll))
-    else {
+    let Some(scroll) = app.preview.as_ref().map(|preview| preview.scroll) else {
         return;
+    };
+    let text = match app.preview_text() {
+        Ok(text) => text,
+        Err(_) => app
+            .preview_source()
+            .map(|source| app.source_card_text(source))
+            .unwrap_or_else(|| "prompt is no longer available".to_string()),
     };
     if preview_area.width < 8 || preview_area.height < 3 {
         return;
     }
     let block = Block::default()
-        .title(" Prompt ")
-        .title_bottom(Line::styled(" ↑↓ scroll · Enter copy · Esc close ", dim()))
+        .title(format!(" {} ", app.preview_title()))
+        .title_bottom(Line::styled(
+            " ↑↓ scroll · Enter copy · e edit · Esc close ",
+            dim(),
+        ))
         .borders(Borders::ALL)
         .border_style(Style::default().fg(ACCENT));
     let inner = block.inner(preview_area);
@@ -429,29 +445,58 @@ fn wrap_lines(text: &str, width: usize) -> Vec<String> {
     for line in text.split('\n') {
         let mut current = String::new();
         let mut current_width = 0;
+        let mut emitted = false;
         for segment in line.split_inclusive(' ') {
-            let word_width = segment.trim_end_matches(' ').chars().count();
-            if current_width > 0 && current_width + word_width > width {
+            let segment_width = UnicodeWidthStr::width(segment);
+            if current_width > 0 && current_width + segment_width > width {
                 wrapped.push(std::mem::take(&mut current));
                 current_width = 0;
+                emitted = true;
             }
-            if word_width > width {
-                for c in segment.chars() {
-                    if current_width == width {
+            if segment_width > width {
+                for grapheme in UnicodeSegmentation::graphemes(segment, true) {
+                    let grapheme_width = UnicodeWidthStr::width(grapheme);
+                    if grapheme_width > width {
+                        if !current.is_empty() {
+                            wrapped.push(std::mem::take(&mut current));
+                            current_width = 0;
+                        }
+                        wrapped.push("…".to_string());
+                        emitted = true;
+                        continue;
+                    }
+                    if current_width > 0 && current_width + grapheme_width > width {
                         wrapped.push(std::mem::take(&mut current));
                         current_width = 0;
+                        emitted = true;
                     }
-                    current.push(c);
-                    current_width += 1;
+                    current.push_str(grapheme);
+                    current_width += grapheme_width;
                 }
                 continue;
             }
             current.push_str(segment);
-            current_width += segment.chars().count();
+            current_width += segment_width;
         }
-        wrapped.push(current);
+        if !current.is_empty() || !emitted {
+            wrapped.push(current);
+        }
     }
     wrapped
+}
+
+fn take_display_width(text: &str, max_width: usize) -> String {
+    let mut width = 0;
+    UnicodeSegmentation::graphemes(text, true)
+        .take_while(|grapheme| {
+            let grapheme_width = UnicodeWidthStr::width(*grapheme);
+            if width + grapheme_width > max_width {
+                return false;
+            }
+            width += grapheme_width;
+            true
+        })
+        .collect()
 }
 
 fn render_tab_menu(frame: &mut Frame, app: &mut App) {
@@ -571,6 +616,103 @@ fn render_close_tab_dialog(frame: &mut Frame, app: &App) {
         ]),
         inner,
     );
+}
+
+fn render_delete_prompt_dialog(frame: &mut Frame, app: &App) {
+    let Some(dialog) = &app.delete_prompt_dialog else {
+        return;
+    };
+    let area = frame.area();
+    if area.width < 8 || area.height < 6 {
+        return;
+    }
+    let width = area.width.saturating_sub(4).clamp(8, 58);
+    let dialog_area = centered_rect(width, 6, area);
+    let block = Block::default()
+        .title(" Remove queue record ")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Red));
+    let inner = block.inner(dialog_area);
+    frame.render_widget(Clear, dialog_area);
+    frame.render_widget(block, dialog_area);
+    frame.render_widget(
+        Paragraph::new(vec![
+            Line::raw(format!(
+                "Remove prompt {} from the queue?",
+                dialog.prompt_id
+            )),
+            Line::styled("History and any source file are preserved.", dim()),
+            Line::styled("Enter remove · Esc cancel", dim()),
+        ]),
+        inner,
+    );
+}
+
+fn render_editor(frame: &mut Frame, app: &mut App, cursor_on: bool) {
+    let area = frame.area();
+    let Some(editor) = app.editor.as_mut() else {
+        return;
+    };
+    let (row, column) = editor.buffer.cursor();
+    let dirty = if editor.is_dirty() {
+        " · modified"
+    } else {
+        ""
+    };
+    let source_kind = match editor.origin {
+        EditorOrigin::Inline { .. } => "inline",
+        EditorOrigin::External { .. } => "external",
+    };
+    let block = Block::default()
+        .title(" Edit ")
+        .title_bottom(Line::styled(
+            format!(
+                " {source_kind} · Ln {}, Col {}{dirty} · Ctrl-S save · Esc close ",
+                row + 1,
+                column + 1
+            ),
+            dim(),
+        ))
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(ACCENT));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    let error_height = u16::from(!editor.error.is_empty() && inner.height > 1);
+    let edit_area = Rect::new(
+        inner.x,
+        inner.y,
+        inner.width,
+        inner.height.saturating_sub(error_height),
+    );
+    editor.buffer.set_cursor_visible(cursor_on);
+    frame.render_widget(editor.buffer.widget(), edit_area);
+    if error_height > 0 {
+        frame.render_widget(
+            Paragraph::new(Line::styled(
+                editor.error.clone(),
+                Style::default().fg(Color::Red),
+            )),
+            Rect::new(inner.x, inner.bottom().saturating_sub(1), inner.width, 1),
+        );
+    }
+
+    if editor.discard_confirmation && area.width >= 8 && area.height >= 6 {
+        let dialog_area = centered_rect(area.width.saturating_sub(4).clamp(8, 52), 6, area);
+        let block = Block::default()
+            .title(" Discard changes? ")
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Red));
+        let inner = block.inner(dialog_area);
+        frame.render_widget(Clear, dialog_area);
+        frame.render_widget(block, dialog_area);
+        frame.render_widget(
+            Paragraph::new(vec![
+                Line::raw("The complete unsaved buffer will be discarded."),
+                Line::styled("Enter discard · Esc keep editing", dim()),
+            ]),
+            inner,
+        );
+    }
 }
 
 fn centered_rect(width: u16, height: u16, area: Rect) -> Rect {

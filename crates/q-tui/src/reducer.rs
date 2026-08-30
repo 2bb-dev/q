@@ -1,14 +1,18 @@
 use crate::app::{
-    App, CloseTabDialog, Effect, Input, Pane, PreviewSource, PromptPreview, QueueMutation,
-    SearchDialog, TabContextMenu, TabDialog, TabDialogMode, TabMenuAction,
+    App, CloseTabDialog, DeletePromptDialog, EditorOrigin, Effect, Input, Pane, PreviewSource,
+    PromptPreview, QueueMutation, SearchDialog, TabContextMenu, TabDialog, TabDialogMode,
+    TabMenuAction,
 };
 use chrono::Utc;
-use q_core::{Prompt, TabId};
+use q_core::{Prompt, PromptSource, TabId};
 use ratatui_textarea::CursorMove;
 
 pub fn reduce(app: &mut App, input: Input) -> Option<Effect> {
     if matches!(input, Input::Quit) {
         return Some(Effect::Quit);
+    }
+    if app.editor.is_some() {
+        return reduce_editor(app, input);
     }
     if let Input::OpenTabMenu { id, column, row } = &input {
         if app.workspace.tab(*id).is_some() && !app.dialog_open() {
@@ -20,6 +24,9 @@ pub fn reduce(app: &mut App, input: Input) -> Option<Effect> {
             });
         }
         return None;
+    }
+    if app.delete_prompt_dialog.is_some() {
+        return reduce_delete_prompt_dialog(app, input);
     }
     if app.close_tab_dialog.is_some() {
         return reduce_close_tab_dialog(app, input);
@@ -85,16 +92,136 @@ pub fn reduce(app: &mut App, input: Input) -> Option<Effect> {
     }
 }
 
+fn reduce_editor(app: &mut App, input: Input) -> Option<Effect> {
+    if app.editor.as_ref()?.discard_confirmation {
+        match input {
+            Input::Enter => app.editor = None,
+            Input::Esc => app.editor.as_mut()?.discard_confirmation = false,
+            _ => {}
+        }
+        return None;
+    }
+
+    match input {
+        Input::CtrlS => save_editor(app),
+        Input::Esc => {
+            if app.editor.as_ref()?.is_dirty() {
+                app.editor.as_mut()?.discard_confirmation = true;
+            } else {
+                app.editor = None;
+            }
+            None
+        }
+        Input::Char(c) => {
+            app.editor.as_mut()?.buffer.insert_char(c);
+            None
+        }
+        Input::Paste(text) => {
+            app.editor.as_mut()?.buffer.insert_str(&text);
+            None
+        }
+        Input::Enter | Input::Newline => {
+            app.editor.as_mut()?.buffer.insert_newline();
+            None
+        }
+        Input::Backspace => {
+            app.editor.as_mut()?.buffer.delete_char();
+            None
+        }
+        Input::Delete => {
+            app.editor.as_mut()?.buffer.delete_next_char();
+            None
+        }
+        Input::DeleteWordBack => {
+            app.editor.as_mut()?.buffer.delete_word();
+            None
+        }
+        Input::DeleteWordForward => {
+            app.editor.as_mut()?.buffer.delete_next_word();
+            None
+        }
+        Input::DeleteToLineStart => {
+            app.editor.as_mut()?.buffer.delete_to_line_start();
+            None
+        }
+        Input::DeleteToLineEnd => {
+            app.editor.as_mut()?.buffer.delete_to_line_end();
+            None
+        }
+        Input::MoveLeft => move_editor(app, CursorMove::Back),
+        Input::MoveRight => move_editor(app, CursorMove::Forward),
+        Input::MoveUp => move_editor(app, CursorMove::Up),
+        Input::MoveDown => move_editor(app, CursorMove::Down),
+        Input::MoveWordLeft => move_editor(app, CursorMove::WordBack),
+        Input::MoveWordRight => move_editor(app, CursorMove::WordForward),
+        Input::MoveLineStart => move_editor(app, CursorMove::Head),
+        Input::MoveLineEnd => move_editor(app, CursorMove::End),
+        Input::Undo => {
+            app.editor.as_mut()?.buffer.undo();
+            None
+        }
+        Input::Redo => {
+            app.editor.as_mut()?.buffer.redo();
+            None
+        }
+        _ => None,
+    }
+}
+
+fn move_editor(app: &mut App, movement: CursorMove) -> Option<Effect> {
+    app.editor.as_mut()?.buffer.move_cursor(movement);
+    None
+}
+
+fn save_editor(app: &mut App) -> Option<Effect> {
+    if !app.editor.as_ref()?.is_dirty() {
+        app.editor = None;
+        return None;
+    }
+    let text = app.editor.as_ref()?.buffer.text();
+    let inline_id = app.editor.as_ref()?.inline_id();
+    if let Some(id) = inline_id {
+        if let Err(error) = PromptSource::inline(text.clone()) {
+            app.editor.as_mut()?.error = error.to_string();
+            return None;
+        }
+        let (expected_source, expected_pinned) = app.editor.as_ref()?.expected_inline_state()?;
+        return Some(Effect::Persist(QueueMutation::EditInline {
+            id,
+            expected_source: expected_source.clone(),
+            expected_pinned,
+            text,
+        }));
+    }
+
+    match app.editor.as_ref()?.origin {
+        EditorOrigin::External { .. } => Some(Effect::SaveExternal),
+        EditorOrigin::Inline { .. } => None,
+    }
+}
+
 fn reduce_preview(app: &mut App, input: Input) -> Option<Effect> {
     let page = app.preview_page;
     let max_scroll = app.preview_max_scroll;
     match input {
         Input::Esc | Input::Char('f') | Input::Char('q') => app.preview = None,
-        Input::Enter => {
-            let text = app.preview_text()?;
-            app.preview = None;
-            app.search = None;
-            return Some(Effect::CopyToClipboard(text));
+        Input::Enter => match app.preview_live_text() {
+            Ok(text) => {
+                app.preview = None;
+                app.search = None;
+                return Some(Effect::CopyToClipboard(text));
+            }
+            Err(error) => return Some(Effect::Status(error)),
+        },
+        Input::Char('e') => {
+            let source = app.preview_source()?.clone();
+            let id = match app.preview.as_ref()?.source {
+                PreviewSource::Prompt(id) => Some(id),
+                PreviewSource::History(_) => None,
+            };
+            if let Err(error) = app.open_editor_for_source(source, id) {
+                return Some(Effect::Status(error));
+            }
         }
         Input::Up | Input::Char('k') => scroll_preview(app, |scroll| scroll.saturating_sub(1)),
         Input::Down | Input::Char('j') => {
@@ -133,8 +260,7 @@ fn reduce_search(app: &mut App, input: Input) -> Option<Effect> {
             search.selected = 0;
         }
         Input::Up => {
-            let search = app.search.as_mut()?;
-            search.selected = search.selected.saturating_sub(1);
+            app.search.as_mut()?.selected = app.search.as_ref()?.selected.saturating_sub(1)
         }
         Input::Down => {
             let search = app.search.as_mut()?;
@@ -153,8 +279,8 @@ fn reduce_search(app: &mut App, input: Input) -> Option<Effect> {
 
 fn forget_selected_history(app: &mut App) -> Option<Effect> {
     let selected = app.search.as_ref()?.selected;
-    let text = app.search_results().get(selected)?.text.clone();
-    if !app.workspace.forget_history(&text) {
+    let source = app.search_results().get(selected)?.source().clone();
+    if !app.workspace.forget_history(&source) {
         return None;
     }
     app.search_folds.clear();
@@ -162,19 +288,19 @@ fn forget_selected_history(app: &mut App) -> Option<Effect> {
     if let Some(search) = app.search.as_mut() {
         search.selected = selected.min(remaining.saturating_sub(1));
     }
-    Some(Effect::Persist(QueueMutation::ForgetHistory(text)))
+    Some(Effect::Persist(QueueMutation::ForgetHistory(source)))
 }
 
 fn open_history_preview(app: &mut App, index: usize) {
-    let Some(entry) = app
+    let Some(source) = app
         .search_results()
         .get(index)
-        .map(|entry| entry.text.clone())
+        .map(|entry| entry.source().clone())
     else {
         return;
     };
     app.preview = Some(PromptPreview {
-        source: PreviewSource::History(entry),
+        source: PreviewSource::History(source),
         scroll: 0,
     });
 }
@@ -198,9 +324,7 @@ fn activate_tab_menu_action(app: &mut App, action: TabMenuAction) -> Option<Effe
     let menu = app.tab_menu.take()?;
     let tab = app.workspace.tab(menu.tab_id)?;
     match action {
-        TabMenuAction::Rename => {
-            app.tab_dialog = Some(TabDialog::rename(tab.id(), tab.name()));
-        }
+        TabMenuAction::Rename => app.tab_dialog = Some(TabDialog::rename(tab.id(), tab.name())),
         TabMenuAction::Close => {
             if app.workspace.tabs().len() == 1 {
                 app.status = "cannot close the last tab".to_string();
@@ -211,6 +335,23 @@ fn activate_tab_menu_action(app: &mut App, action: TabMenuAction) -> Option<Effe
                 });
             }
         }
+    }
+    None
+}
+
+fn reduce_delete_prompt_dialog(app: &mut App, input: Input) -> Option<Effect> {
+    match input {
+        Input::Esc => app.delete_prompt_dialog = None,
+        Input::Enter => {
+            let dialog = app.delete_prompt_dialog.take()?;
+            return Some(Effect::Persist(QueueMutation::Remove {
+                id: dialog.prompt_id,
+                expected_source: dialog.expected_source,
+                expected_pinned: dialog.expected_pinned,
+                expected_external_content: None,
+            }));
+        }
+        _ => {}
     }
     None
 }
@@ -305,8 +446,7 @@ fn reduce_queue(app: &mut App, input: Input) -> Option<Effect> {
         Input::Down => {
             let len = app.visible_prompts().len();
             if len > 0 {
-                let next = app.selected.map(|i| (i + 1).min(len - 1)).unwrap_or(0);
-                app.selected = Some(next);
+                app.selected = Some(app.selected.map(|i| (i + 1).min(len - 1)).unwrap_or(0));
             }
             None
         }
@@ -318,17 +458,25 @@ fn reduce_queue(app: &mut App, input: Input) -> Option<Effect> {
         }
         Input::Enter => {
             let prompt = app.selected_prompt()?.clone();
+            let text = match app.resolve_source_owned(prompt.source()) {
+                Ok(text) => text,
+                Err(error) => return Some(Effect::Status(error)),
+            };
             if prompt.pinned {
-                Some(Effect::CopyToClipboard(prompt.text))
+                Some(Effect::CopyToClipboard(text))
             } else {
-                app.workspace.remove_prompt(prompt.id).ok()?;
-                reclamp_selection(app);
-                if app.visible_prompts().is_empty() {
-                    app.focus = Pane::Composer;
-                }
+                let expected_external_content = prompt
+                    .external_markdown_path()
+                    .is_some()
+                    .then(|| text.clone());
                 Some(Effect::CopyAndPersist {
-                    text: prompt.text,
-                    mutation: QueueMutation::Remove(prompt.id),
+                    text,
+                    mutation: QueueMutation::Remove {
+                        id: prompt.id,
+                        expected_source: prompt.source().clone(),
+                        expected_pinned: prompt.pinned,
+                        expected_external_content,
+                    },
                 })
             }
         }
@@ -337,33 +485,39 @@ fn reduce_queue(app: &mut App, input: Input) -> Option<Effect> {
             app.workspace
                 .set_prompt_pinned(prompt.id, !prompt.pinned)
                 .ok()?;
-            if let Some(new_index) = app
+            app.selected = app
                 .visible_prompts()
                 .iter()
-                .position(|candidate| candidate.id == prompt.id)
-            {
-                app.selected = Some(new_index);
-            }
+                .position(|candidate| candidate.id == prompt.id);
             Some(Effect::Persist(QueueMutation::SetPinned {
                 id: prompt.id,
                 pinned: !prompt.pinned,
             }))
         }
         Input::Char('f') => {
-            let prompt = app.selected_prompt()?;
+            let id = app.selected_prompt()?.id;
             app.preview = Some(PromptPreview {
-                source: PreviewSource::Prompt(prompt.id),
+                source: PreviewSource::Prompt(id),
                 scroll: 0,
             });
             None
         }
         Input::Char('e') => {
             let prompt = app.selected_prompt()?.clone();
-            app.workspace.remove_prompt(prompt.id).ok()?;
-            reclamp_selection(app);
-            app.composer.set_text(&prompt.text);
-            app.focus = Pane::Composer;
-            Some(Effect::Persist(QueueMutation::Remove(prompt.id)))
+            if let Err(error) = app.open_editor_for_source(prompt.source().clone(), Some(prompt.id))
+            {
+                return Some(Effect::Status(error));
+            }
+            None
+        }
+        Input::Char('d') => {
+            let prompt = app.selected_prompt()?;
+            app.delete_prompt_dialog = Some(DeletePromptDialog {
+                prompt_id: prompt.id,
+                expected_source: prompt.source().clone(),
+                expected_pinned: prompt.pinned,
+            });
+            None
         }
         Input::OpenRenameTab => {
             let tab = app.workspace.tab(app.active_tab_id)?;
@@ -416,15 +570,6 @@ fn reduce_composer(app: &mut App, input: Input) -> Option<Effect> {
         _ => return None,
     }
     None
-}
-
-fn reclamp_selection(app: &mut App) {
-    let len = app.visible_prompts().len();
-    if len == 0 {
-        app.selected = None;
-    } else if let Some(index) = app.selected {
-        app.selected = Some(index.min(len - 1));
-    }
 }
 
 #[cfg(test)]

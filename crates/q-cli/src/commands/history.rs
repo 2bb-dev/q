@@ -1,7 +1,29 @@
 use anyhow::Result;
-use q_core::search::Query;
+use chrono::{DateTime, Utc};
+use q_core::{search::Query, HistoryEntry};
+use serde::Serialize;
 
-use super::{with_workspace, with_workspace_mut};
+use super::{source, with_workspace, with_workspace_mut};
+
+#[derive(Serialize)]
+struct HistoryOutput<'a> {
+    text: Option<String>,
+    source: source::SourceOutput<'a>,
+    available: bool,
+    created_at: DateTime<Utc>,
+}
+
+impl<'a> HistoryOutput<'a> {
+    fn from_entry(entry: &'a HistoryEntry) -> Self {
+        let resolved = source::resolve(entry.source());
+        Self {
+            text: resolved.text,
+            source: resolved.source,
+            available: resolved.available,
+            created_at: entry.created_at(),
+        }
+    }
+}
 
 pub fn run(json: bool, search: Option<String>, clear: bool, forget: Option<String>) -> Result<()> {
     if clear {
@@ -10,8 +32,9 @@ pub fn run(json: bool, search: Option<String>, clear: bool, forget: Option<Strin
         return Ok(());
     }
     if let Some(term) = forget {
+        let query = Query::new(&term);
         let forgotten =
-            with_workspace_mut(|workspace| Ok(workspace.forget_history_matching(&term)))?;
+            with_workspace_mut(|workspace| Ok(source::forget_matching(workspace, &query)))?;
         println!("forgot {}", prompt_count(forgotten));
         return Ok(());
     }
@@ -21,10 +44,11 @@ pub fn run(json: bool, search: Option<String>, clear: bool, forget: Option<Strin
         let entries: Vec<_> = workspace
             .history()
             .iter()
-            .filter(|entry| query.is_match(&entry.text))
+            .filter(|entry| query.is_match(&source::searchable_text(entry.source())))
             .collect();
         if json {
-            println!("{}", serde_json::to_string_pretty(&entries)?);
+            let outputs: Vec<_> = entries.into_iter().map(HistoryOutput::from_entry).collect();
+            println!("{}", serde_json::to_string_pretty(&outputs)?);
             return Ok(());
         }
         if entries.is_empty() {
@@ -32,10 +56,14 @@ pub fn run(json: bool, search: Option<String>, clear: bool, forget: Option<Strin
             return Ok(());
         }
         for entry in entries {
+            let display = match source::read(entry.source()) {
+                Ok(text) => condense(&text),
+                Err(error) => error.to_string(),
+            };
             println!(
                 "{} {}",
-                entry.created_at.format("%Y-%m-%d %H:%M"),
-                condense(&entry.text)
+                entry.created_at().format("%Y-%m-%d %H:%M"),
+                display
             );
         }
         Ok(())
@@ -49,7 +77,7 @@ fn prompt_count(count: usize) -> String {
     }
 }
 
-/// Single line, trimmed to 80 chars, for list display.
+/// Single line, trimmed to 80 chars, for history display.
 fn condense(text: &str) -> String {
     let condensed = text.split_whitespace().collect::<Vec<_>>().join(" ");
     if condensed.chars().count() <= 80 {

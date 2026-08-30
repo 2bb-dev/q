@@ -35,7 +35,10 @@ fn rename_preserves_tab_data_and_order() {
     let tab = workspace.tab(id).unwrap();
     assert_eq!(tab.name(), "renamed");
     assert_eq!(tab.activity_at(), activity);
-    assert_eq!(tab.queue().get(prompt_id).unwrap().text, "hello");
+    assert_eq!(
+        tab.queue().get(prompt_id).unwrap().inline_text().unwrap(),
+        "hello"
+    );
 }
 
 #[test]
@@ -139,7 +142,7 @@ fn history_outlives_prompts_and_tabs() {
     let texts: Vec<_> = workspace
         .history()
         .iter()
-        .map(|entry| entry.text.as_str())
+        .map(|entry| entry.inline_text().unwrap())
         .collect();
     assert_eq!(texts, vec!["tab is gone", "copied away"]);
 }
@@ -158,9 +161,79 @@ fn re_adding_the_same_text_moves_one_entry_to_the_top() {
     let texts: Vec<_> = workspace
         .history()
         .iter()
-        .map(|entry| entry.text.as_str())
+        .map(|entry| entry.inline_text().unwrap())
         .collect();
     assert_eq!(texts, vec!["first", "second"]);
+}
+
+#[test]
+fn history_deduplicates_by_typed_source_identity() {
+    let mut workspace = Workspace::new();
+    let tab = workspace.first_tab_id();
+    let path = std::env::temp_dir().join("same.md");
+    let path_text = path.to_str().unwrap().to_string();
+
+    workspace
+        .add_prompt(tab, Prompt::new(&path_text).unwrap())
+        .unwrap();
+    workspace
+        .add_prompt(tab, Prompt::from_external_markdown(&path).unwrap())
+        .unwrap();
+    workspace
+        .add_prompt(tab, Prompt::from_external_markdown(&path).unwrap())
+        .unwrap();
+
+    assert_eq!(workspace.history().len(), 2);
+    assert_eq!(
+        workspace.history()[0].external_markdown_path(),
+        Some(path.as_path())
+    );
+    assert_eq!(
+        workspace.history()[1].inline_text(),
+        Some(path_text.as_str())
+    );
+}
+
+#[test]
+fn workspace_inline_edit_records_new_history_and_retains_old_text() {
+    let mut workspace = Workspace::new();
+    let tab = workspace.first_tab_id();
+    let mut prompt = Prompt::new("before").unwrap();
+    prompt.pinned = true;
+    let id = prompt.id;
+    let created_at = prompt.created_at;
+    workspace.add_prompt(tab, prompt).unwrap();
+
+    workspace.edit_prompt_inline(id, "after").unwrap();
+
+    let edited = workspace.get_prompt(id).unwrap();
+    assert_eq!(edited.id, id);
+    assert_eq!(edited.created_at, created_at);
+    assert!(edited.pinned);
+    assert_eq!(edited.inline_text(), Some("after"));
+    let history: Vec<_> = workspace
+        .history()
+        .iter()
+        .map(|entry| entry.inline_text().unwrap())
+        .collect();
+    assert_eq!(history, vec!["after", "before"]);
+}
+
+#[test]
+fn workspace_inline_edit_rejects_an_external_source_without_new_history() {
+    let mut workspace = Workspace::new();
+    let tab = workspace.first_tab_id();
+    let path = std::env::temp_dir().join("live.md");
+    let id = workspace
+        .add_prompt(tab, Prompt::from_external_markdown(&path).unwrap())
+        .unwrap();
+
+    assert!(workspace.edit_prompt_inline(id, "inline now").is_err());
+    assert_eq!(workspace.history().len(), 1);
+    assert_eq!(
+        workspace.get_prompt(id).unwrap().external_markdown_path(),
+        Some(path.as_path())
+    );
 }
 
 #[test]
@@ -176,7 +249,7 @@ fn history_keeps_only_the_newest_entries() {
 
     assert_eq!(workspace.history().len(), HISTORY_LIMIT);
     assert_eq!(
-        workspace.history()[0].text,
+        workspace.history()[0].inline_text().unwrap(),
         format!("prompt-{}", HISTORY_LIMIT + 9)
     );
 }
@@ -196,7 +269,7 @@ fn history_respects_the_byte_budget_as_well_as_the_entry_count() {
     let bytes: usize = workspace
         .history()
         .iter()
-        .map(|entry| entry.text.len())
+        .map(|entry| entry.source().byte_len())
         .sum();
     assert!(
         workspace.history().len() < 10,
@@ -207,7 +280,26 @@ fn history_respects_the_byte_budget_as_well_as_the_entry_count() {
         "history kept {bytes} bytes"
     );
     // Newest survives.
-    assert!(workspace.history()[0].text.ends_with('9'));
+    assert!(workspace.history()[0].inline_text().unwrap().ends_with('9'));
+}
+
+#[test]
+fn external_path_bytes_count_toward_the_history_budget() {
+    let mut workspace = Workspace::new();
+    let tab = workspace.first_tab_id();
+    let component = "p".repeat(HISTORY_BYTE_BUDGET / 2);
+    for index in 0..3 {
+        let path = std::env::temp_dir().join(format!("{component}-{index}.md"));
+        workspace
+            .add_prompt(tab, Prompt::from_external_markdown(path).unwrap())
+            .unwrap();
+    }
+
+    assert_eq!(workspace.history().len(), 2);
+    assert!(workspace
+        .history()
+        .iter()
+        .all(|entry| entry.external_markdown_path().is_some()));
 }
 
 #[test]
@@ -232,13 +324,13 @@ fn forget_history_removes_one_entry_by_exact_text() {
             .unwrap();
     }
 
-    assert!(workspace.forget_history("secret token"));
-    assert!(!workspace.forget_history("secret token"));
+    assert!(workspace.forget_inline_history("secret token"));
+    assert!(!workspace.forget_inline_history("secret token"));
 
     let texts: Vec<_> = workspace
         .history()
         .iter()
-        .map(|entry| entry.text.as_str())
+        .map(|entry| entry.inline_text().unwrap())
         .collect();
     assert_eq!(texts, vec!["keep me"]);
 }
@@ -258,7 +350,7 @@ fn forget_history_matching_uses_language_agnostic_search() {
     let texts: Vec<_> = workspace
         .history()
         .iter()
-        .map(|entry| entry.text.as_str())
+        .map(|entry| entry.inline_text().unwrap())
         .collect();
     assert_eq!(texts, vec!["unrelated prompt"]);
 }
@@ -288,6 +380,9 @@ fn prompt_operations_find_owning_tab_globally() {
     assert_eq!(workspace.resolve_prompt(&id.to_string()).unwrap(), id);
     workspace.set_prompt_pinned(id, true).unwrap();
     assert!(workspace.get_prompt(id).unwrap().pinned);
-    assert_eq!(workspace.remove_prompt(id).unwrap().text, "global");
+    assert_eq!(
+        workspace.remove_prompt(id).unwrap().inline_text().unwrap(),
+        "global"
+    );
     assert!(workspace.get_prompt(id).is_none());
 }

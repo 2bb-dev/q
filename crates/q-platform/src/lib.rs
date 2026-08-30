@@ -4,6 +4,7 @@
 //! `directories`, and `image`. All OS-specific concerns live here.
 
 pub mod clipboard;
+pub mod external_document;
 pub mod images;
 pub mod lock;
 pub mod paths;

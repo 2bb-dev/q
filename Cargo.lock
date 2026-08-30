@@ -1545,11 +1545,13 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "assert_cmd",
+ "chrono",
  "clap",
  "predicates",
  "q-core",
  "q-platform",
  "q-tui",
+ "serde",
  "serde_json",
  "tempfile",
 ]
@@ -1593,6 +1595,8 @@ dependencies = [
  "ratatui",
  "ratatui-textarea",
  "tempfile",
+ "unicode-segmentation",
+ "unicode-width",
 ]
 
 [[package]]

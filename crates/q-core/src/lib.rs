@@ -8,6 +8,6 @@ pub mod storage;
 pub mod workspace;
 
 pub use error::{CoreError, Result};
-pub use prompt::{Prompt, PromptId};
+pub use prompt::{Prompt, PromptId, PromptSource};
 pub use queue::Queue;
 pub use workspace::{HistoryEntry, Tab, TabId, Workspace};

@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::error::{CoreError, Result};
-use crate::{Prompt, PromptId, Queue};
+use crate::{Prompt, PromptId, PromptSource, Queue};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct TabId(pub Uuid);
@@ -54,16 +54,40 @@ impl Tab {
 /// copied, deleted, or its tab is closed.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HistoryEntry {
-    pub text: String,
-    pub created_at: DateTime<Utc>,
+    source: PromptSource,
+    created_at: DateTime<Utc>,
+}
+
+impl HistoryEntry {
+    pub fn source(&self) -> &PromptSource {
+        &self.source
+    }
+
+    pub fn inline_text(&self) -> Option<&str> {
+        self.source.inline_text()
+    }
+
+    pub fn external_markdown_path(&self) -> Option<&std::path::Path> {
+        self.source.external_markdown_path()
+    }
+
+    pub fn created_at(&self) -> DateTime<Utc> {
+        self.created_at
+    }
+
+    fn search_text(&self) -> &str {
+        match &self.source {
+            PromptSource::Inline { text } => text,
+            PromptSource::ExternalMarkdown { path } => path.to_str().unwrap_or(""),
+        }
+    }
 }
 
 /// Newest entries are kept; older ones are trimmed.
 pub const HISTORY_LIMIT: usize = 500;
 
-/// Upper bound on the bytes of prompt text kept in history. Prompt length is
-/// unbounded, so the entry count alone does not bound the size of the file the
-/// TUI reloads and every mutation rewrites.
+/// Target byte budget for prompt sources kept in history. Inline text charges
+/// its UTF-8 length and an external source charges its Unicode path.
 pub const HISTORY_BYTE_BUDGET: usize = 256 * 1024;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -139,31 +163,31 @@ impl Workspace {
             .iter()
             .flat_map(|tab| tab.queue.iter())
             .map(|prompt| HistoryEntry {
-                text: prompt.text.clone(),
+                source: prompt.source().clone(),
                 created_at: prompt.created_at,
             })
             .collect();
         prompts.sort_by_key(|entry| entry.created_at);
         for entry in prompts {
-            self.record_history(entry.text, entry.created_at);
+            self.record_history(entry.source, entry.created_at);
         }
     }
 
-    fn record_history(&mut self, text: String, created_at: DateTime<Utc>) {
-        self.history.retain(|entry| entry.text != text);
-        self.history.insert(0, HistoryEntry { text, created_at });
+    fn record_history(&mut self, source: PromptSource, created_at: DateTime<Utc>) {
+        self.history.retain(|entry| entry.source != source);
+        self.history.insert(0, HistoryEntry { source, created_at });
         self.trim_history();
     }
 
-    /// Drops the oldest entries until history fits both the entry count and the
-    /// byte budget. The newest entry is always kept, even when oversized on its
-    /// own, so a freshly added prompt is never immediately unsearchable.
+    /// Drops entries after the first one that crosses the byte budget, matching
+    /// schema 3 history semantics. The newest entry is always kept, even when
+    /// oversized on its own.
     fn trim_history(&mut self) {
         self.history.truncate(HISTORY_LIMIT);
         let mut used = 0usize;
         let mut kept = 0usize;
         for entry in &self.history {
-            used = used.saturating_add(entry.text.len());
+            used = used.saturating_add(entry.source.byte_len());
             kept += 1;
             if used > HISTORY_BYTE_BUDGET {
                 break;
@@ -172,18 +196,28 @@ impl Workspace {
         self.history.truncate(kept.max(1));
     }
 
-    /// Forgets the single history entry whose text matches exactly.
-    pub fn forget_history(&mut self, text: &str) -> bool {
+    /// Forgets the history entry with the same typed source identity.
+    pub fn forget_history(&mut self, source: &PromptSource) -> bool {
         let before = self.history.len();
-        self.history.retain(|entry| entry.text != text);
+        self.history.retain(|entry| &entry.source != source);
         before != self.history.len()
     }
 
-    /// Forgets every history entry matching `query`, returning how many went.
+    /// Convenience for forgetting an inline history entry by exact text.
+    pub fn forget_inline_history(&mut self, text: &str) -> bool {
+        let source = PromptSource::Inline {
+            text: text.to_string(),
+        };
+        self.forget_history(&source)
+    }
+
+    /// Forgets every history entry whose inline text or external path matches
+    /// `query`, returning how many went.
     pub fn forget_history_matching(&mut self, query: &str) -> usize {
         let query = crate::search::Query::new(query);
         let before = self.history.len();
-        self.history.retain(|entry| !query.is_match(&entry.text));
+        self.history
+            .retain(|entry| !query.is_match(entry.search_text()));
         before - self.history.len()
     }
 
@@ -281,7 +315,7 @@ impl Workspace {
     pub fn add_prompt(&mut self, tab_id: TabId, prompt: Prompt) -> Result<PromptId> {
         let prompt_id = prompt.id;
         let activity_at = prompt.created_at;
-        let history_text = prompt.text.clone();
+        let history_source = prompt.source().clone();
         let tab = self
             .tabs
             .iter_mut()
@@ -289,7 +323,7 @@ impl Workspace {
             .ok_or_else(|| CoreError::TabNotFound(tab_id.0.to_string()))?;
         tab.queue.add(prompt);
         tab.activity_at = tab.activity_at.max(activity_at);
-        self.record_history(history_text, activity_at);
+        self.record_history(history_source, activity_at);
         self.normalize();
         Ok(prompt_id)
     }
@@ -314,6 +348,28 @@ impl Workspace {
 
     pub fn get_prompt(&self, id: PromptId) -> Option<&Prompt> {
         self.tabs.iter().find_map(|tab| tab.queue.get(id))
+    }
+
+    /// Edits an inline prompt in place and records the new contents in
+    /// history. The prior inline source remains as a separate history entry.
+    pub fn edit_prompt_inline(&mut self, id: PromptId, new_text: impl Into<String>) -> Result<()> {
+        let edited_at = Utc::now();
+        let tab = self
+            .tabs
+            .iter_mut()
+            .find(|tab| tab.queue.get(id).is_some())
+            .ok_or_else(|| CoreError::NotFound(id.to_string()))?;
+        tab.queue.edit_inline(id, new_text)?;
+        let source = tab
+            .queue
+            .get(id)
+            .ok_or_else(|| CoreError::NotFound(id.to_string()))?
+            .source()
+            .clone();
+        tab.activity_at = tab.activity_at.max(edited_at);
+        self.record_history(source, edited_at);
+        self.normalize();
+        Ok(())
     }
 
     pub fn remove_prompt(&mut self, id: PromptId) -> Result<Prompt> {
@@ -352,6 +408,12 @@ impl Workspace {
         for tab in &mut self.tabs {
             tab.name = tab.name.trim().to_string();
             normalize_name(&tab.name)?;
+            for prompt in tab.queue.iter() {
+                prompt.validate()?;
+            }
+        }
+        for entry in &self.history {
+            entry.source.validate()?;
         }
         for index in 0..self.tabs.len() {
             let tab = &self.tabs[index];
@@ -381,6 +443,9 @@ impl Workspace {
         }
         self.history
             .sort_by_key(|entry| std::cmp::Reverse(entry.created_at));
+        let mut seen = std::collections::HashSet::new();
+        self.history
+            .retain(|entry| seen.insert(entry.source.clone()));
         self.trim_history();
         self.tabs.sort_by(|left, right| {
             right

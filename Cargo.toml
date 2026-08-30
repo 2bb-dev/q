@@ -37,6 +37,8 @@ image = { version = "0.25", default-features = false, features = ["png", "jpeg",
 ratatui = { version = "0.30", default-features = false, features = ["crossterm", "underline-color"] }
 ratatui-textarea = { version = "0.9", default-features = false }
 crossterm = "0.29"
+unicode-segmentation = "1"
+unicode-width = "0.2"
 
 # Dev
 assert_cmd = "2"

@@ -140,7 +140,7 @@ fn rendered_prompts_and_composer_have_click_targets() {
 }
 
 #[test]
-fn wrapped_prompt_is_clickable_across_its_rendered_height() {
+fn truncated_prompt_is_clickable_on_its_single_rendered_row() {
     let mut workspace = Workspace::new();
     let tab = workspace.first_tab_id();
     workspace
@@ -154,15 +154,15 @@ fn wrapped_prompt_is_clickable_across_its_rendered_height() {
     render(&mut app, false, 12);
 
     let area = app.prompt_hits[0].area;
-    assert!(area.height > 1);
+    assert_eq!(area.height, 1);
     assert_eq!(
-        app.content_input_at(area.x, area.bottom() - 1),
+        app.content_input_at(area.x, area.y),
         Some(crate::app::Input::SelectPrompt(0))
     );
 }
 
 #[test]
-fn long_prompt_collapses_to_three_rows_with_an_ellipsis() {
+fn long_prompt_truncates_to_one_row_with_an_ellipsis() {
     let mut workspace = Workspace::new();
     let tab = workspace.first_tab_id();
     let text = std::iter::repeat_n("word", 200)
@@ -175,26 +175,26 @@ fn long_prompt_collapses_to_three_rows_with_an_ellipsis() {
 
     let rendered = render(&mut app, false, 40);
 
-    assert_eq!(app.prompt_hits[0].area.height, 3);
+    assert_eq!(app.prompt_hits[0].area.height, 1);
     assert!(rendered.contains('…'), "missing ellipsis; got:\n{rendered}");
     let body_rows = rendered
         .lines()
         .filter(|line| line.contains("word"))
         .count();
-    assert_eq!(body_rows, 3);
+    assert_eq!(body_rows, 1);
 }
 
 #[test]
-fn collapsed_rows_condense_whitespace_and_keep_short_prompts_intact() {
+fn collapsed_rows_show_only_the_first_source_line() {
     assert_eq!(
         collapsed_rows("title\n\n    indented body", 40),
-        vec!["title indented body".to_string()]
+        vec!["title".to_string()]
     );
     assert_eq!(collapsed_rows("short", 40), vec!["short".to_string()]);
     let rows = collapsed_rows(&"x".repeat(500), 20);
-    assert_eq!(rows.len(), 3);
-    assert!(rows[2].ends_with('…'));
-    assert!(rows.iter().all(|row| row.chars().count() <= 16));
+    assert_eq!(rows.len(), 1);
+    assert!(rows[0].ends_with('…'));
+    assert!(UnicodeWidthStr::width(rows[0].as_str()) <= 15);
 }
 
 #[test]
@@ -276,7 +276,9 @@ fn search_without_matches_says_so() {
 fn history_preview_renders_text_that_is_no_longer_queued() {
     let mut app = App::new(Workspace::new());
     app.preview = Some(crate::app::PromptPreview {
-        source: crate::app::PreviewSource::History("long gone prompt".to_string()),
+        source: crate::app::PreviewSource::History(
+            q_core::PromptSource::inline("long gone prompt").unwrap(),
+        ),
         scroll: 0,
     });
 
@@ -334,4 +336,85 @@ fn narrow_tab_bar_keeps_active_tab_and_create_visible() {
     let text = render(&mut app, false, 18);
     assert!(text.contains(" 1 "));
     assert!(text.contains(" + "));
+}
+
+#[test]
+fn collapsed_rows_respect_terminal_width_for_wide_unicode() {
+    let rows = collapsed_rows("界界界界界界界界", 10);
+
+    assert_eq!(rows.len(), 1);
+    assert!(UnicodeWidthStr::width(rows[0].as_str()) <= 5);
+    assert!(rows[0].ends_with('…'));
+}
+
+#[test]
+fn wrapping_and_truncation_keep_emoji_graphemes_intact() {
+    let emoji = "👩‍💻";
+
+    assert_eq!(
+        wrap_lines(&format!("{emoji}{emoji}"), 2),
+        vec![emoji, emoji]
+    );
+    assert_eq!(take_display_width(emoji, 2), emoji);
+    assert_eq!(take_display_width(emoji, 1), "");
+    assert_eq!(wrap_lines(emoji, 1), vec!["…"]);
+}
+
+#[test]
+fn external_cards_show_only_the_first_line_of_live_content() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let path = dir.path().join("source.md");
+    std::fs::write(&path, "one\ntwo\nthree\nfour").unwrap();
+    let mut workspace = Workspace::new();
+    let tab = workspace.first_tab_id();
+    workspace
+        .add_prompt(tab, Prompt::from_external_markdown(path).unwrap())
+        .unwrap();
+    let mut app = App::new(workspace);
+
+    let text = render(&mut app, false, 40);
+    assert_eq!(app.prompt_hits[0].area.height, 1);
+    assert!(text.contains("one"));
+    assert!(!text.contains("two"));
+    assert!(!text.contains("three"));
+    assert!(!text.contains("[file]"));
+}
+
+#[test]
+fn broken_reference_and_following_item_both_render() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let path = dir.path().join("deleted.md");
+    let mut workspace = Workspace::new();
+    let tab = workspace.first_tab_id();
+    workspace
+        .add_prompt(tab, Prompt::from_external_markdown(path.clone()).unwrap())
+        .unwrap();
+    workspace
+        .add_prompt(tab, Prompt::new("still visible").unwrap())
+        .unwrap();
+    let mut app = App::new(workspace);
+
+    let text = render(&mut app, false, 200);
+    assert!(text.contains(path.to_str().unwrap()));
+    assert!(text.contains("moved or deleted"));
+    assert!(text.contains("still visible"));
+}
+
+#[test]
+fn full_screen_editor_renders_title_buffer_position_and_save_hints() {
+    let mut workspace = Workspace::new();
+    let tab = workspace.first_tab_id();
+    workspace
+        .add_prompt(tab, Prompt::new("editable body").unwrap())
+        .unwrap();
+    let mut app = App::new(workspace);
+    crate::reduce(&mut app, crate::Input::Char('e'));
+
+    let text = render(&mut app, true, 60);
+    assert!(text.contains("Edit"));
+    assert!(!text.contains("Prompt"));
+    assert!(text.contains("editable body"));
+    assert!(text.contains("Ln 1, Col"));
+    assert!(text.contains("Ctrl-S save"));
+    assert!(!text.contains("p pin"));
 }

@@ -23,8 +23,14 @@ fn short_id_of(dir: &TempDir, text_marker: &str) -> String {
 #[test]
 fn pin_moves_prompt_to_top() {
     let dir = TempDir::new().unwrap();
-    q(&dir).args(["add", "first"]).assert().success();
-    q(&dir).args(["add", "second"]).assert().success();
+    q(&dir)
+        .args(["add", "--tab", "1", "first"])
+        .assert()
+        .success();
+    q(&dir)
+        .args(["add", "--tab", "1", "second"])
+        .assert()
+        .success();
     let id = short_id_of(&dir, "second");
 
     q(&dir).args(["pin", &id]).assert().success();
@@ -38,8 +44,14 @@ fn pin_moves_prompt_to_top() {
 #[test]
 fn unpin_moves_prompt_to_unpinned_section() {
     let dir = TempDir::new().unwrap();
-    q(&dir).args(["add", "alpha", "--pin"]).assert().success();
-    q(&dir).args(["add", "beta"]).assert().success();
+    q(&dir)
+        .args(["add", "--tab", "1", "alpha", "--pin"])
+        .assert()
+        .success();
+    q(&dir)
+        .args(["add", "--tab", "1", "beta"])
+        .assert()
+        .success();
     let id = short_id_of(&dir, "alpha");
 
     q(&dir).args(["unpin", &id]).assert().success();
@@ -75,7 +87,7 @@ fn unpin_unknown_id_fails() {
 #[test]
 fn pin_short_id_rejected() {
     let dir = TempDir::new().unwrap();
-    q(&dir).args(["add", "x"]).assert().success();
+    q(&dir).args(["add", "--tab", "1", "x"]).assert().success();
     q(&dir)
         .args(["pin", "abc"])
         .assert()
@@ -86,7 +98,10 @@ fn pin_short_id_rejected() {
 #[test]
 fn pin_already_pinned_is_idempotent() {
     let dir = TempDir::new().unwrap();
-    q(&dir).args(["add", "stuck", "--pin"]).assert().success();
+    q(&dir)
+        .args(["add", "--tab", "1", "stuck", "--pin"])
+        .assert()
+        .success();
     let id = short_id_of(&dir, "stuck");
     q(&dir).args(["pin", &id]).assert().success();
     let out = q(&dir).args(["list"]).output().unwrap();

@@ -14,14 +14,17 @@ struct Cli {
 enum Command {
     /// Add a new prompt to the queue.
     Add {
-        /// Prompt text. If omitted, read from stdin.
+        /// Prompt text or a .md/.markdown file reference. If omitted, read text from stdin.
         text: Option<String>,
+        /// Treat a Markdown-looking positional argument as literal text.
+        #[arg(long = "text")]
+        literal: bool,
         /// Add as pinned.
         #[arg(long)]
         pin: bool,
-        /// Target tab name. Required when multiple tabs exist.
+        /// Target tab name.
         #[arg(long)]
-        tab: Option<String>,
+        tab: String,
     },
     /// List all prompts.
     List {
@@ -68,6 +71,8 @@ enum Command {
         #[arg(long)]
         tab: Option<String>,
     },
+    /// Remove a prompt without copying it.
+    Remove { id: String },
     /// Pin a prompt.
     Pin { id: String },
     /// Unpin a prompt.
@@ -79,7 +84,12 @@ enum Command {
 fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {
-        Some(Command::Add { text, pin, tab }) => commands::add::run(text, pin, tab),
+        Some(Command::Add {
+            text,
+            literal,
+            pin,
+            tab,
+        }) => commands::add::run(text, literal, pin, &tab),
         Some(Command::List { json, tab }) => commands::list::run(json, tab),
         Some(Command::History {
             search,
@@ -99,6 +109,7 @@ fn main() -> Result<()> {
             stdout,
             tab,
         }) => commands::pop::run(id, next, stdout, tab),
+        Some(Command::Remove { id }) => commands::remove::run(&id),
         Some(Command::Pin { id }) => commands::pin::run(&id, true),
         Some(Command::Unpin { id }) => commands::pin::run(&id, false),
         Some(Command::Tui) | None => commands::tui::run(),

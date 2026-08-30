@@ -53,13 +53,13 @@ fn replace_workspace_closes_preview_of_removed_prompt() {
 fn history_preview_survives_workspace_reload() {
     let mut app = App::new(Workspace::new());
     app.preview = Some(PromptPreview {
-        source: PreviewSource::History("gone from the queue".to_string()),
+        source: PreviewSource::History(PromptSource::inline("gone from the queue").unwrap()),
         scroll: 0,
     });
 
     app.replace_workspace(Workspace::new());
 
-    assert_eq!(app.preview_text().as_deref(), Some("gone from the queue"));
+    assert_eq!(app.preview_text().as_deref(), Ok("gone from the queue"));
 }
 
 #[test]
@@ -79,7 +79,7 @@ fn search_results_filter_history_case_insensitively() {
     app.search.as_mut().unwrap().query = "api".to_string();
     let results = app.search_results();
     assert_eq!(results.len(), 1);
-    assert_eq!(results[0].text, "deploy the API");
+    assert_eq!(results[0].inline_text(), Some("deploy the API"));
 }
 
 #[test]
@@ -110,4 +110,64 @@ fn replace_workspace_preserves_tab_selection_and_composer() {
     );
     assert_eq!(app.composer.text(), "draft");
     assert_eq!(app.focus, Pane::Composer);
+}
+
+#[test]
+fn external_cache_refreshes_live_content_and_searches_path_and_text() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let path = dir.path().join("live.md");
+    std::fs::write(&path, "first value").unwrap();
+    let mut workspace = Workspace::new();
+    let tab = workspace.first_tab_id();
+    let prompt = Prompt::from_external_markdown(path.clone()).unwrap();
+    let source = prompt.source().clone();
+    workspace.add_prompt(tab, prompt).unwrap();
+    let mut app = App::new(workspace);
+
+    assert_eq!(app.resolve_source(&source).as_deref(), Ok("first value"));
+    app.search = Some(SearchDialog {
+        query: "live.md".to_string(),
+        selected: 0,
+    });
+    assert_eq!(app.search_results().len(), 1);
+
+    std::fs::write(&path, "second value").unwrap();
+    app.refresh_external_content();
+    app.search.as_mut().unwrap().query = "second".to_string();
+    assert_eq!(app.search_results().len(), 1);
+    assert_eq!(app.resolve_source(&source).as_deref(), Ok("second value"));
+}
+
+#[test]
+fn forced_external_refresh_rereads_even_when_metadata_might_be_unchanged() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let path = dir.path().join("live.md");
+    std::fs::write(&path, "same size A").unwrap();
+    let mut workspace = Workspace::new();
+    let tab = workspace.first_tab_id();
+    let prompt = Prompt::from_external_markdown(path.clone()).unwrap();
+    let source = prompt.source().clone();
+    workspace.add_prompt(tab, prompt).unwrap();
+    let mut app = App::new(workspace);
+
+    std::fs::write(&path, "same size B").unwrap();
+    app.refresh_external_content_forced();
+
+    assert_eq!(app.resolve_source(&source).as_deref(), Ok("same size B"));
+}
+
+#[test]
+fn broken_reference_keeps_absolute_path_and_moved_deleted_error_visible() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let path = dir.path().join("gone.md");
+    let mut workspace = Workspace::new();
+    let tab = workspace.first_tab_id();
+    let prompt = Prompt::from_external_markdown(path.clone()).unwrap();
+    let source = prompt.source().clone();
+    workspace.add_prompt(tab, prompt).unwrap();
+    let app = App::new(workspace);
+
+    let card = app.source_card_text(&source);
+    assert!(card.contains(path.to_str().unwrap()));
+    assert!(card.contains("moved or deleted"));
 }

@@ -10,8 +10,14 @@ fn q(dir: &TempDir) -> Command {
 #[test]
 fn copy_next_stdout_prints_newest_prompt_text() {
     let dir = TempDir::new().unwrap();
-    q(&dir).args(["add", "alpha"]).assert().success();
-    q(&dir).args(["add", "beta"]).assert().success();
+    q(&dir)
+        .args(["add", "--tab", "1", "alpha"])
+        .assert()
+        .success();
+    q(&dir)
+        .args(["add", "--tab", "1", "beta"])
+        .assert()
+        .success();
     q(&dir)
         .args(["copy", "--next", "--stdout"])
         .assert()
@@ -22,7 +28,10 @@ fn copy_next_stdout_prints_newest_prompt_text() {
 #[test]
 fn copy_by_id_prefix_stdout_prints_that_prompt() {
     let dir = TempDir::new().unwrap();
-    q(&dir).args(["add", "target"]).assert().success();
+    q(&dir)
+        .args(["add", "--tab", "1", "target"])
+        .assert()
+        .success();
     let output = q(&dir).args(["list"]).output().unwrap();
     let stdout = String::from_utf8(output.stdout).unwrap();
     let id = stdout
@@ -41,7 +50,10 @@ fn copy_by_id_prefix_stdout_prints_that_prompt() {
 #[test]
 fn copy_does_not_remove_the_prompt() {
     let dir = TempDir::new().unwrap();
-    q(&dir).args(["add", "keep me"]).assert().success();
+    q(&dir)
+        .args(["add", "--tab", "1", "keep me"])
+        .assert()
+        .success();
     q(&dir)
         .args(["copy", "--next", "--stdout"])
         .assert()
@@ -55,7 +67,7 @@ fn copy_does_not_remove_the_prompt() {
 #[test]
 fn copy_without_id_or_next_fails() {
     let dir = TempDir::new().unwrap();
-    q(&dir).args(["add", "x"]).assert().success();
+    q(&dir).args(["add", "--tab", "1", "x"]).assert().success();
     q(&dir)
         .args(["copy"])
         .assert()

@@ -1,4 +1,4 @@
-use crate::app::{App, Effect, QueueMutation};
+use crate::app::{App, EditorOrigin, Effect, QueueMutation};
 use crate::reducer::reduce;
 use crate::render::draw;
 use crate::{Input, Pane};
@@ -115,6 +115,15 @@ impl QueueSync {
             return;
         }
         self.last_check = Instant::now();
+        let forced_reload = self.last_reload.elapsed() >= FULL_RELOAD_INTERVAL;
+        // Resolve live references at the sync cadence, never while drawing.
+        // Periodically bypass metadata equality so coarse timestamps cannot
+        // leave same-size external rewrites stale indefinitely.
+        if forced_reload {
+            app.refresh_external_content_forced();
+        } else {
+            app.refresh_external_content();
+        }
 
         let fingerprint = match q_core::storage::fingerprint(queue_path) {
             Ok(fingerprint) => fingerprint,
@@ -123,7 +132,6 @@ impl QueueSync {
                 return;
             }
         };
-        let forced_reload = self.last_reload.elapsed() >= FULL_RELOAD_INTERVAL;
         if fingerprint == self.fingerprint && !forced_reload {
             return;
         }
@@ -145,6 +153,22 @@ enum MutationOutcome {
 }
 
 fn commit_mutation(queue_path: &Path, mutation: &QueueMutation) -> Result<MutationOutcome> {
+    let document_lock_path = match mutation {
+        QueueMutation::Remove {
+            expected_source: q_core::PromptSource::ExternalMarkdown { path },
+            expected_external_content: Some(_),
+            ..
+        } => Some(q_platform::external_document::document_lock_path(path)?),
+        _ => None,
+    };
+    let mut document_lock = match document_lock_path {
+        Some(path) => Some(FileLock::open(&path)?),
+        None => None,
+    };
+    let _document_guard = match document_lock.as_mut() {
+        Some(lock) => Some(lock.write()?),
+        None => None,
+    };
     let mut lock = FileLock::open(&queue_path.with_extension("lock"))?;
     let _guard = lock.write()?;
     let mut workspace = q_core::storage::load(queue_path)?;
@@ -153,7 +177,21 @@ fn commit_mutation(queue_path: &Path, mutation: &QueueMutation) -> Result<Mutati
         QueueMutation::Add { tab_id, prompt } => {
             workspace.add_prompt(*tab_id, prompt.clone()).map(|_| ())
         }
-        QueueMutation::Remove(id) => workspace.remove_prompt(*id).map(|_| ()),
+        QueueMutation::Remove {
+            id,
+            expected_source,
+            expected_pinned,
+            expected_external_content,
+        } => verify_prompt_state(&workspace, *id, expected_source, *expected_pinned)
+            .and_then(|()| verify_external_content(expected_source, expected_external_content))
+            .and_then(|()| workspace.remove_prompt(*id).map(|_| ())),
+        QueueMutation::EditInline {
+            id,
+            expected_source,
+            expected_pinned,
+            text,
+        } => verify_prompt_state(&workspace, *id, expected_source, *expected_pinned)
+            .and_then(|()| workspace.edit_prompt_inline(*id, text.clone())),
         QueueMutation::SetPinned { id, pinned } => workspace.set_prompt_pinned(*id, *pinned),
         QueueMutation::CreateTab {
             id,
@@ -164,8 +202,8 @@ fn commit_mutation(queue_path: &Path, mutation: &QueueMutation) -> Result<Mutati
             .map(|_| ()),
         QueueMutation::RenameTab { id, name } => workspace.rename_tab(*id, name.clone()),
         QueueMutation::CloseTab(id) => workspace.close_tab(*id),
-        QueueMutation::ForgetHistory(text) => {
-            workspace.forget_history(text);
+        QueueMutation::ForgetHistory(source) => {
+            workspace.forget_history(source);
             Ok(())
         }
     };
@@ -177,10 +215,58 @@ fn commit_mutation(queue_path: &Path, mutation: &QueueMutation) -> Result<Mutati
     Ok(MutationOutcome::Committed(workspace))
 }
 
+fn verify_prompt_state(
+    workspace: &q_core::Workspace,
+    id: q_core::PromptId,
+    expected_source: &q_core::PromptSource,
+    expected_pinned: bool,
+) -> q_core::Result<()> {
+    let prompt = workspace
+        .get_prompt(id)
+        .ok_or_else(|| q_core::CoreError::NotFound(id.to_string()))?;
+    if prompt.source() != expected_source || prompt.pinned != expected_pinned {
+        return Err(q_core::CoreError::Invalid(
+            "prompt changed in another window; retry the operation".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn verify_external_content(
+    source: &q_core::PromptSource,
+    expected_content: &Option<String>,
+) -> q_core::Result<()> {
+    let Some(expected_content) = expected_content else {
+        return Ok(());
+    };
+    let Some(path) = source.external_markdown_path() else {
+        return Err(q_core::CoreError::Invalid(
+            "external content precondition requires an external source".to_string(),
+        ));
+    };
+    let current = q_platform::external_document::read_utf8(path)
+        .map_err(|error| q_core::CoreError::Invalid(error.to_string()))?;
+    if &current != expected_content {
+        return Err(q_core::CoreError::Invalid(
+            "external document changed after it was copied; reference was not removed".to_string(),
+        ));
+    }
+    Ok(())
+}
+
 fn persist_mutation(app: &mut App, queue_path: &Path, mutation: &QueueMutation) -> Result<bool> {
     match commit_mutation(queue_path, mutation)? {
         MutationOutcome::Committed(workspace) => {
+            let close_editor = match mutation {
+                QueueMutation::EditInline { id, .. } => {
+                    app.editor.as_ref().and_then(|editor| editor.inline_id()) == Some(*id)
+                }
+                _ => false,
+            };
             app.replace_workspace(workspace);
+            if close_editor {
+                app.editor = None;
+            }
             Ok(true)
         }
         MutationOutcome::Rejected(workspace, error) => {
@@ -197,10 +283,65 @@ fn persist_mutation(app: &mut App, queue_path: &Path, mutation: &QueueMutation) 
                     dialog.error = error.clone();
                     app.tab_dialog = Some(dialog);
                 }
+                QueueMutation::EditInline { id, .. }
+                    if app.editor.as_ref().and_then(|editor| editor.inline_id()) == Some(*id) =>
+                {
+                    if let Some(editor) = app.editor.as_mut() {
+                        editor.error = error.clone();
+                    }
+                }
                 _ => {}
             }
             app.status = error;
             Ok(false)
+        }
+    }
+}
+
+fn save_external_editor(app: &mut App, _queue_path: &Path) -> bool {
+    let result: Result<()> = (|| {
+        let source_path = match &app
+            .editor
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("editor is no longer open"))?
+            .origin
+        {
+            EditorOrigin::External { document } => document.path.as_path(),
+            EditorOrigin::Inline { .. } => {
+                return Err(anyhow::anyhow!("inline editor has no external document"));
+            }
+        };
+        let lock_path = q_platform::external_document::document_lock_path(source_path)?;
+        let mut lock = FileLock::open(&lock_path)?;
+        let _guard = lock.write()?;
+        let editor = app
+            .editor
+            .as_mut()
+            .ok_or_else(|| anyhow::anyhow!("editor is no longer open"))?;
+        let text = editor.buffer.text();
+        match &mut editor.origin {
+            EditorOrigin::External { document } => document.save(&text)?,
+            EditorOrigin::Inline { .. } => {
+                return Err(anyhow::anyhow!("inline editor has no external document"));
+            }
+        }
+        Ok(())
+    })();
+
+    match result {
+        Ok(()) => {
+            app.editor = None;
+            app.refresh_external_content_forced();
+            app.status.clear();
+            true
+        }
+        Err(error) => {
+            let message = format!("save failed: {error}");
+            if let Some(editor) = app.editor.as_mut() {
+                editor.error = message.clone();
+            }
+            app.status = message;
+            false
         }
     }
 }
@@ -212,6 +353,12 @@ fn handle_event(
     queue_path: &Path,
 ) -> Result<bool> {
     let input = match event {
+        Event::Key(key)
+            if matches!(key.kind, KeyEventKind::Press | KeyEventKind::Repeat)
+                && app.editor.is_some() =>
+        {
+            map_editor_key(key)
+        }
         Event::Key(key)
             if matches!(key.kind, KeyEventKind::Press | KeyEventKind::Repeat)
                 && app.tab_menu.is_some() =>
@@ -233,6 +380,7 @@ fn handle_event(
         Event::Key(key) if matches!(key.kind, KeyEventKind::Press | KeyEventKind::Repeat) => {
             map_key(key, app.focus, app.dialog_open())
         }
+        Event::Paste(text) if app.editor.is_some() => Some(Input::Paste(text)),
         Event::Paste(text) if app.focus == Pane::Composer && !app.overlay_open() => {
             Some(Input::Paste(text))
         }
@@ -279,20 +427,34 @@ fn handle_event(
     let effect = reduce(app, input);
     match effect {
         Some(Effect::Quit) => return Ok(true),
-        Some(Effect::CopyToClipboard(text)) => {
-            clipboard.set_text(&text)?;
-            app.status = format!("copied {} chars", text.chars().count());
-        }
-        Some(Effect::CopyAndPersist { text, mutation }) => {
-            clipboard.set_text(&text)?;
-            if persist_mutation(app, queue_path, &mutation)? {
-                app.status = format!("copied {} chars", text.chars().count());
+        Some(Effect::CopyToClipboard(text)) => match clipboard.set_text(&text) {
+            Ok(()) => app.status = format!("copied {} chars", text.chars().count()),
+            Err(error) => app.status = format!("clipboard failed: {error}"),
+        },
+        Some(Effect::CopyAndPersist { text, mutation }) => match clipboard.set_text(&text) {
+            Ok(()) => match persist_mutation(app, queue_path, &mutation) {
+                Ok(true) => app.status = format!("copied {} chars", text.chars().count()),
+                Ok(false) => {}
+                Err(error) => {
+                    app.status = format!("copied, but queue removal failed: {error}");
+                }
+            },
+            Err(error) => app.status = format!("clipboard failed: {error}"),
+        },
+        Some(Effect::Persist(mutation)) => match persist_mutation(app, queue_path, &mutation) {
+            Ok(true) => app.status.clear(),
+            Ok(false) => {}
+            Err(error) if matches!(mutation, QueueMutation::EditInline { .. }) => {
+                let message = format!("save failed: {error}");
+                if let Some(editor) = app.editor.as_mut() {
+                    editor.error = message.clone();
+                }
+                app.status = message;
             }
-        }
-        Some(Effect::Persist(mutation)) => {
-            if persist_mutation(app, queue_path, &mutation)? {
-                app.status.clear();
-            }
+            Err(error) => return Err(error),
+        },
+        Some(Effect::SaveExternal) => {
+            save_external_editor(app, queue_path);
         }
         Some(Effect::Status(msg)) => {
             app.status = msg;
@@ -304,6 +466,15 @@ fn handle_event(
         }
     }
     Ok(false)
+}
+
+fn map_editor_key(key: KeyEvent) -> Option<Input> {
+    if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
+        return Some(Input::Esc);
+    }
+    // Reuse all composer movement, undo/redo, deletion, and paste bindings.
+    // The editor reducer interprets Enter as a newline.
+    map_key(key, Pane::Composer, false)
 }
 
 fn map_tab_menu_key(key: KeyEvent) -> Option<Input> {
@@ -407,6 +578,7 @@ fn map_key(key: KeyEvent, focus: Pane, dialog_open: bool) -> Option<Input> {
             (KeyCode::Char('k'), KeyModifiers::NONE) => Some(Input::Up),
             (KeyCode::Char('p'), KeyModifiers::NONE) => Some(Input::Char('p')),
             (KeyCode::Char('e'), KeyModifiers::NONE) => Some(Input::Char('e')),
+            (KeyCode::Char('d'), KeyModifiers::NONE) => Some(Input::Char('d')),
             (KeyCode::Char('f'), KeyModifiers::NONE) => Some(Input::Char('f')),
             (KeyCode::Char('['), KeyModifiers::NONE) => Some(Input::PreviousTab),
             (KeyCode::Char(']'), KeyModifiers::NONE) => Some(Input::NextTab),

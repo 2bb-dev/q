@@ -1,10 +1,13 @@
 use chrono::{DateTime, Utc};
-use q_core::{HistoryEntry, Prompt, PromptId, TabId, Workspace};
+use q_core::{HistoryEntry, Prompt, PromptId, PromptSource, TabId, Workspace};
+use q_platform::external_document::{self, DocumentFingerprint, EditorDocument};
 use ratatui::{
     layout::Rect,
     style::{Modifier, Style},
 };
 use ratatui_textarea::{CursorMove, TextArea, WrapMode};
+use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Pane {
@@ -63,7 +66,18 @@ pub enum QueueMutation {
         tab_id: TabId,
         prompt: Prompt,
     },
-    Remove(PromptId),
+    Remove {
+        id: PromptId,
+        expected_source: PromptSource,
+        expected_pinned: bool,
+        expected_external_content: Option<String>,
+    },
+    EditInline {
+        id: PromptId,
+        expected_source: PromptSource,
+        expected_pinned: bool,
+        text: String,
+    },
     SetPinned {
         id: PromptId,
         pinned: bool,
@@ -78,7 +92,7 @@ pub enum QueueMutation {
         name: String,
     },
     CloseTab(TabId),
-    ForgetHistory(String),
+    ForgetHistory(PromptSource),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -89,6 +103,7 @@ pub enum Effect {
         mutation: QueueMutation,
     },
     Persist(QueueMutation),
+    SaveExternal,
     Quit,
     Status(String),
 }
@@ -116,7 +131,7 @@ pub struct TabContextMenu {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PreviewSource {
     Prompt(PromptId),
-    History(String),
+    History(PromptSource),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -135,6 +150,13 @@ pub struct SearchDialog {
 pub struct CloseTabDialog {
     pub tab_id: TabId,
     pub tab_name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeletePromptDialog {
+    pub prompt_id: PromptId,
+    pub expected_source: PromptSource,
+    pub expected_pinned: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -216,6 +238,11 @@ impl ComposerEditor {
         self.textarea.lines()
     }
 
+    pub fn cursor(&self) -> (usize, usize) {
+        let cursor = self.textarea.cursor();
+        (cursor.0, cursor.1)
+    }
+
     pub fn set_text(&mut self, text: &str) {
         *self = Self::from_text(text);
     }
@@ -287,6 +314,76 @@ impl ComposerEditor {
     }
 }
 
+pub enum EditorOrigin {
+    Inline {
+        id: PromptId,
+        expected_source: PromptSource,
+        expected_pinned: bool,
+    },
+    External {
+        document: EditorDocument,
+    },
+}
+
+pub struct FullScreenEditor {
+    pub origin: EditorOrigin,
+    pub buffer: ComposerEditor,
+    original_text: String,
+    pub error: String,
+    pub discard_confirmation: bool,
+}
+
+impl FullScreenEditor {
+    fn inline(id: PromptId, text: &str, expected_pinned: bool) -> Self {
+        Self {
+            origin: EditorOrigin::Inline {
+                id,
+                expected_source: PromptSource::Inline {
+                    text: text.to_string(),
+                },
+                expected_pinned,
+            },
+            buffer: ComposerEditor::from_text(text),
+            original_text: text.to_string(),
+            error: String::new(),
+            discard_confirmation: false,
+        }
+    }
+
+    fn external(document: EditorDocument) -> Self {
+        let text = document.text.clone();
+        Self {
+            origin: EditorOrigin::External { document },
+            buffer: ComposerEditor::from_text(&text),
+            original_text: text,
+            error: String::new(),
+            discard_confirmation: false,
+        }
+    }
+
+    pub fn is_dirty(&self) -> bool {
+        self.buffer.text() != self.original_text
+    }
+
+    pub fn inline_id(&self) -> Option<PromptId> {
+        match self.origin {
+            EditorOrigin::Inline { id, .. } => Some(id),
+            EditorOrigin::External { .. } => None,
+        }
+    }
+
+    pub fn expected_inline_state(&self) -> Option<(&PromptSource, bool)> {
+        match &self.origin {
+            EditorOrigin::Inline {
+                expected_source,
+                expected_pinned,
+                ..
+            } => Some((expected_source, *expected_pinned)),
+            EditorOrigin::External { .. } => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum TabHitTarget {
     Tab(TabId),
@@ -317,6 +414,11 @@ pub(crate) struct SearchHit {
     pub index: usize,
 }
 
+struct CachedExternal {
+    fingerprint: Result<DocumentFingerprint, String>,
+    content: Result<String, String>,
+}
+
 pub struct App {
     pub workspace: Workspace,
     pub active_tab_id: TabId,
@@ -326,20 +428,20 @@ pub struct App {
     pub tab_dialog: Option<TabDialog>,
     pub tab_menu: Option<TabContextMenu>,
     pub close_tab_dialog: Option<CloseTabDialog>,
+    pub delete_prompt_dialog: Option<DeletePromptDialog>,
     pub preview: Option<PromptPreview>,
     pub search: Option<SearchDialog>,
+    pub editor: Option<FullScreenEditor>,
     pub status: String,
     pub(crate) tab_hits: Vec<TabHit>,
     pub(crate) tab_menu_hits: Vec<TabMenuHit>,
     pub(crate) prompt_hits: Vec<PromptHit>,
     pub(crate) search_hits: Vec<SearchHit>,
-    /// Folded history texts, positionally aligned with `workspace.history()`.
-    /// Cached because folding the whole history on every keystroke and every
-    /// frame is too slow once history fills up.
     pub(crate) search_folds: Vec<q_core::search::Folded>,
     pub(crate) composer_area: Option<Rect>,
     pub(crate) preview_page: u16,
     pub(crate) preview_max_scroll: u16,
+    external_cache: HashMap<PathBuf, CachedExternal>,
 }
 
 impl App {
@@ -350,7 +452,7 @@ impl App {
             .tab(active_tab_id)
             .map(|tab| tab.queue().is_empty())
             .unwrap_or(true);
-        Self {
+        let mut app = Self {
             active_tab_id,
             focus: if empty { Pane::Composer } else { Pane::Queue },
             selected: if empty { None } else { Some(0) },
@@ -359,8 +461,10 @@ impl App {
             tab_dialog: None,
             tab_menu: None,
             close_tab_dialog: None,
+            delete_prompt_dialog: None,
             preview: None,
             search: None,
+            editor: None,
             status: String::new(),
             tab_hits: Vec::new(),
             tab_menu_hits: Vec::new(),
@@ -370,7 +474,10 @@ impl App {
             composer_area: None,
             preview_page: 1,
             preview_max_scroll: 0,
-        }
+            external_cache: HashMap::new(),
+        };
+        app.refresh_external_content();
+        app
     }
 
     pub fn visible_prompts(&self) -> Vec<&Prompt> {
@@ -385,9 +492,91 @@ impl App {
             .and_then(|index| self.visible_prompts().into_iter().nth(index))
     }
 
-    /// History entries matching the current search query, newest first.
-    /// Uses the fold cache when it is in step with history, and otherwise folds
-    /// on the spot so callers holding only `&self` still get correct results.
+    pub fn resolve_source(&self, source: &PromptSource) -> Result<String, String> {
+        match source {
+            PromptSource::Inline { text } => Ok(text.clone()),
+            PromptSource::ExternalMarkdown { path } => self
+                .external_cache
+                .get(path)
+                .map(|cached| cached.content.clone())
+                .unwrap_or_else(|| Err("external document has not been loaded".to_string())),
+        }
+    }
+
+    pub fn resolve_source_owned(&self, source: &PromptSource) -> Result<String, String> {
+        match source {
+            PromptSource::Inline { text } => Ok(text.clone()),
+            PromptSource::ExternalMarkdown { path } => {
+                external_document::read_utf8(path).map_err(|error| error.to_string())
+            }
+        }
+    }
+
+    pub fn source_card_text(&self, source: &PromptSource) -> String {
+        self.resolve_source(source)
+            .unwrap_or_else(|error| error.to_string())
+    }
+
+    pub fn refresh_external_content(&mut self) {
+        self.refresh_external_content_inner(false);
+    }
+
+    pub fn refresh_external_content_forced(&mut self) {
+        self.refresh_external_content_inner(true);
+    }
+
+    fn refresh_external_content_inner(&mut self, force: bool) {
+        let paths: HashSet<PathBuf> = self
+            .workspace
+            .tabs()
+            .iter()
+            .flat_map(|tab| tab.queue().iter())
+            .filter_map(|prompt| prompt.external_markdown_path().map(Path::to_path_buf))
+            .chain(
+                self.workspace
+                    .history()
+                    .iter()
+                    .filter_map(|entry| entry.external_markdown_path().map(Path::to_path_buf)),
+            )
+            .collect();
+        self.external_cache.retain(|path, _| paths.contains(path));
+        let mut changed = false;
+        for path in paths {
+            let fingerprint =
+                external_document::fingerprint(&path).map_err(|error| error.to_string());
+            let unchanged = !force
+                && self.external_cache.get(&path).is_some_and(|cached| {
+                    cached.content.is_ok() && cached.fingerprint == fingerprint
+                });
+            if unchanged {
+                continue;
+            }
+            let content = external_document::read_utf8(&path).map_err(|error| error.to_string());
+            self.external_cache.insert(
+                path,
+                CachedExternal {
+                    fingerprint,
+                    content,
+                },
+            );
+            changed = true;
+        }
+        if changed {
+            // Live external text participates in history search.
+            self.search_folds.clear();
+        }
+    }
+
+    fn searchable_text(&self, source: &PromptSource) -> String {
+        match source {
+            PromptSource::Inline { text } => text.clone(),
+            PromptSource::ExternalMarkdown { path } => {
+                let content = self.resolve_source(source).unwrap_or_default();
+                format!("{}\n{content}", path.display())
+            }
+        }
+    }
+
     pub fn search_results(&self) -> Vec<&HistoryEntry> {
         let Some(search) = &self.search else {
             return Vec::new();
@@ -402,14 +591,13 @@ impl App {
                 if cached {
                     query.is_match_folded(&self.search_folds[*index])
                 } else {
-                    query.is_match(&entry.text)
+                    query.is_match(&self.searchable_text(entry.source()))
                 }
             })
             .map(|(_, entry)| entry)
             .collect()
     }
 
-    /// Folds history once so later keystrokes and frames only substring-match.
     pub(crate) fn refresh_search_folds(&mut self) {
         if self.search_folds.len() == self.workspace.history().len() {
             return;
@@ -418,18 +606,61 @@ impl App {
             .workspace
             .history()
             .iter()
-            .map(|entry| q_core::search::folded(&entry.text))
+            .map(|entry| q_core::search::folded(&self.searchable_text(entry.source())))
             .collect();
     }
 
-    pub(crate) fn preview_text(&self) -> Option<String> {
+    pub(crate) fn preview_source(&self) -> Option<&PromptSource> {
         match &self.preview.as_ref()?.source {
-            PreviewSource::Prompt(id) => self
-                .workspace
-                .get_prompt(*id)
-                .map(|prompt| prompt.text.clone()),
-            PreviewSource::History(text) => Some(text.clone()),
+            PreviewSource::Prompt(id) => self.workspace.get_prompt(*id).map(Prompt::source),
+            PreviewSource::History(source) => Some(source),
         }
+    }
+
+    pub(crate) fn preview_text(&self) -> Result<String, String> {
+        let source = self
+            .preview_source()
+            .ok_or_else(|| "prompt is no longer available".to_string())?;
+        self.resolve_source(source)
+    }
+
+    pub(crate) fn preview_live_text(&self) -> Result<String, String> {
+        let source = self
+            .preview_source()
+            .ok_or_else(|| "prompt is no longer available".to_string())?;
+        self.resolve_source_owned(source)
+    }
+
+    pub(crate) fn preview_title(&self) -> String {
+        self.preview_source()
+            .and_then(PromptSource::external_markdown_path)
+            .map(|path| path.display().to_string())
+            .unwrap_or_else(|| "Prompt".to_string())
+    }
+
+    pub(crate) fn open_editor_for_source(
+        &mut self,
+        source: PromptSource,
+        inline_id: Option<PromptId>,
+    ) -> Result<(), String> {
+        match source {
+            PromptSource::Inline { text } => {
+                let id = inline_id.ok_or_else(|| {
+                    "history-only inline prompts cannot be edited in place".to_string()
+                })?;
+                let expected_pinned = self
+                    .workspace
+                    .get_prompt(id)
+                    .ok_or_else(|| "prompt is no longer available".to_string())?
+                    .pinned;
+                self.editor = Some(FullScreenEditor::inline(id, &text, expected_pinned));
+            }
+            PromptSource::ExternalMarkdown { path } => {
+                let document = EditorDocument::load(&path).map_err(|error| error.to_string())?;
+                self.editor = Some(FullScreenEditor::external(document));
+            }
+        }
+        Ok(())
     }
 
     pub fn select_tab(&mut self, id: TabId) {
@@ -449,7 +680,6 @@ impl App {
         let previous_index = self.selected;
         let active_tab_id = self.active_tab_id;
         self.workspace = workspace;
-        // Another window may have reordered or rewritten history.
         self.search_folds.clear();
         self.active_tab_id = self
             .workspace
@@ -493,6 +723,7 @@ impl App {
                 let len = self.visible_prompts().len();
                 (len > 0).then(|| previous_index.unwrap_or(0).min(len - 1))
             });
+        self.refresh_external_content();
     }
 
     pub(crate) fn tab_input_at(&self, column: u16, row: u16) -> Option<Input> {
@@ -555,15 +786,17 @@ impl App {
     }
 
     pub(crate) fn dialog_open(&self) -> bool {
-        self.tab_dialog.is_some() || self.close_tab_dialog.is_some()
+        self.tab_dialog.is_some()
+            || self.close_tab_dialog.is_some()
+            || self.delete_prompt_dialog.is_some()
     }
 
-    /// Any surface that takes over input from the queue and composer panes.
     pub(crate) fn overlay_open(&self) -> bool {
         self.dialog_open()
             || self.tab_menu.is_some()
             || self.search.is_some()
             || self.preview.is_some()
+            || self.editor.is_some()
     }
 }
 

@@ -12,7 +12,7 @@ fn end_to_end_reducer_flow() {
     let eff = reduce(&mut app, Input::CtrlS);
     assert!(matches!(
         eff,
-        Some(Effect::Persist(QueueMutation::Add { prompt, .. })) if prompt.text == "first"
+        Some(Effect::Persist(QueueMutation::Add { prompt, .. })) if prompt.inline_text() == Some("first")
     ));
 
     // Add a second prompt.
@@ -38,16 +38,22 @@ fn end_to_end_reducer_flow() {
 
     // Copy+pop the unpinned "second".
     reduce(&mut app, Input::Down);
-    let second_id = app.selected_prompt().unwrap().id;
+    let second = app.selected_prompt().unwrap().clone();
     let eff = reduce(&mut app, Input::Enter);
     assert_eq!(
         eff,
         Some(Effect::CopyAndPersist {
             text: "second".to_string(),
-            mutation: QueueMutation::Remove(second_id),
+            mutation: QueueMutation::Remove {
+                id: second.id,
+                expected_source: second.source().clone(),
+                expected_pinned: false,
+                expected_external_content: None,
+            },
         })
     );
-    assert_eq!(app.visible_prompts().len(), 1);
+    // Removal is committed by runtime only after clipboard success.
+    assert_eq!(app.visible_prompts().len(), 2);
 
     // Quit.
     assert_eq!(reduce(&mut app, Input::Quit), Some(Effect::Quit));

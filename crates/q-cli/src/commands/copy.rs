@@ -1,7 +1,9 @@
+use std::io::{self, Write};
+
 use anyhow::{anyhow, Result};
 use q_platform::clipboard::{Clipboard, SystemClipboard};
 
-use super::with_workspace;
+use super::{source, with_workspace};
 
 pub fn run(id: Option<String>, next: bool, stdout: bool, tab: Option<String>) -> Result<()> {
     if id.is_none() && !next {
@@ -23,17 +25,16 @@ pub fn run(id: Option<String>, next: bool, stdout: bool, tab: Option<String>) ->
                 .ok_or_else(|| anyhow!("queue is empty"))
         }
     })?;
+    let text = source::read(prompt.source())?;
 
     if stdout {
-        print!("{}", prompt.text);
+        let mut stdout = io::stdout().lock();
+        stdout.write_all(text.as_bytes())?;
+        stdout.flush()?;
         return Ok(());
     }
     let mut cb = SystemClipboard::new()?;
-    cb.set_text(&prompt.text)?;
-    eprintln!(
-        "copied {} ({} chars)",
-        prompt.id,
-        prompt.text.chars().count()
-    );
+    cb.set_text(&text)?;
+    eprintln!("copied {} ({} chars)", prompt.id, text.chars().count());
     Ok(())
 }

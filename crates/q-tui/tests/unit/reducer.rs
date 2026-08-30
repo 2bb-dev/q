@@ -82,18 +82,24 @@ fn next_and_previous_select_adjacent_tabs() {
 }
 
 #[test]
-fn enter_on_unpinned_copies_and_pops() {
+fn enter_on_unpinned_resolves_content_before_requesting_pop() {
     let mut app = app_with(2);
     let prompt = app.selected_prompt().unwrap().clone();
     let effect = reduce(&mut app, Input::Enter);
     assert_eq!(
         effect,
         Some(Effect::CopyAndPersist {
-            text: prompt.text,
-            mutation: QueueMutation::Remove(prompt.id),
+            text: prompt.inline_text().unwrap_or("").to_string(),
+            mutation: QueueMutation::Remove {
+                id: prompt.id,
+                expected_source: prompt.source().clone(),
+                expected_pinned: false,
+                expected_external_content: None,
+            },
         })
     );
-    assert_eq!(app.visible_prompts().len(), 1);
+    // Runtime removes only after clipboard success.
+    assert_eq!(app.visible_prompts().len(), 2);
 }
 
 #[test]
@@ -101,7 +107,12 @@ fn enter_on_pinned_copies_but_does_not_pop() {
     let mut app = app_with(1);
     let id = app.visible_prompts()[0].id;
     app.workspace.set_prompt_pinned(id, true).unwrap();
-    let text = app.selected_prompt().unwrap().text.clone();
+    let text = app
+        .selected_prompt()
+        .unwrap()
+        .inline_text()
+        .unwrap_or("")
+        .to_string();
     assert_eq!(
         reduce(&mut app, Input::Enter),
         Some(Effect::CopyToClipboard(text))
@@ -124,15 +135,20 @@ fn p_pins_selected_prompt() {
 }
 
 #[test]
-fn e_moves_selected_prompt_into_composer() {
+fn e_opens_selected_prompt_in_full_screen_editor_without_removing_it() {
     let mut app = app_with(1);
-    let text = app.selected_prompt().unwrap().text.clone();
-    assert!(matches!(
-        reduce(&mut app, Input::Char('e')),
-        Some(Effect::Persist(QueueMutation::Remove(_)))
-    ));
-    assert_eq!(app.composer.text(), text);
-    assert_eq!(app.focus, Pane::Composer);
+    let text = app
+        .selected_prompt()
+        .unwrap()
+        .inline_text()
+        .unwrap_or("")
+        .to_string();
+    assert_eq!(reduce(&mut app, Input::Char('e')), None);
+    assert_eq!(
+        app.editor.as_ref().map(|editor| editor.buffer.text()),
+        Some(text)
+    );
+    assert_eq!(app.visible_prompts().len(), 1);
 }
 
 #[test]
@@ -196,7 +212,9 @@ fn search_filters_history_and_previews_the_selected_entry() {
     assert_eq!(reduce(&mut app, Input::Enter), None);
     assert_eq!(
         app.preview.as_ref().map(|preview| preview.source.clone()),
-        Some(PreviewSource::History("write the docs".to_string()))
+        Some(PreviewSource::History(
+            PromptSource::inline("write the docs").unwrap()
+        ))
     );
 }
 
@@ -215,7 +233,10 @@ fn search_matches_across_scripts_and_accents() {
         reduce(&mut app, Input::Char(c));
     }
     assert_eq!(app.search_results().len(), 1);
-    assert_eq!(app.search_results()[0].text, "улучшить конфиги");
+    assert_eq!(
+        app.search_results()[0].inline_text(),
+        Some("улучшить конфиги")
+    );
 
     for _ in 0.."uluchshit".len() {
         reduce(&mut app, Input::Backspace);
@@ -224,26 +245,39 @@ fn search_matches_across_scripts_and_accents() {
         reduce(&mut app, Input::Char(c));
     }
     assert_eq!(app.search_results().len(), 1);
-    assert_eq!(app.search_results()[0].text, "café Müller");
+    assert_eq!(app.search_results()[0].inline_text(), Some("café Müller"));
 }
 
 #[test]
 fn search_finds_prompts_that_were_already_copied_away() {
     let mut app = app_with(1);
-    let text = app.selected_prompt().unwrap().text.clone();
+    let text = app
+        .selected_prompt()
+        .unwrap()
+        .inline_text()
+        .unwrap_or("")
+        .to_string();
+    let id = app.selected_prompt().unwrap().id;
     reduce(&mut app, Input::Enter);
+    // Simulate the successful runtime commit.
+    app.workspace.remove_prompt(id).unwrap();
     assert!(app.visible_prompts().is_empty());
 
     reduce(&mut app, Input::OpenSearch);
 
     assert_eq!(app.search_results().len(), 1);
-    assert_eq!(app.search_results()[0].text, text);
+    assert_eq!(app.search_results()[0].inline_text(), Some(text.as_str()));
 }
 
 #[test]
 fn copying_from_search_preview_returns_to_the_main_page() {
     let mut app = app_with(1);
-    let text = app.selected_prompt().unwrap().text.clone();
+    let text = app
+        .selected_prompt()
+        .unwrap()
+        .inline_text()
+        .unwrap_or("")
+        .to_string();
     reduce(&mut app, Input::OpenSearch);
     reduce(&mut app, Input::SelectHistory(0));
     assert!(app.preview.is_some());
@@ -298,7 +332,12 @@ fn typing_in_search_resets_the_selection() {
 #[test]
 fn preview_enter_copies_prompt_without_removing_it() {
     let mut app = app_with(1);
-    let text = app.selected_prompt().unwrap().text.clone();
+    let text = app
+        .selected_prompt()
+        .unwrap()
+        .inline_text()
+        .unwrap_or("")
+        .to_string();
     reduce(&mut app, Input::Char('f'));
 
     assert_eq!(
@@ -320,20 +359,20 @@ fn forget_history_drops_the_selected_entry_and_persists_it() {
     }
     reduce(&mut app, Input::OpenSearch);
     // Newest first, so the secret is selected.
-    assert_eq!(app.search_results()[0].text, "secret token");
+    assert_eq!(app.search_results()[0].inline_text(), Some("secret token"));
 
     let effect = reduce(&mut app, Input::ForgetHistory);
 
     assert_eq!(
         effect,
         Some(Effect::Persist(QueueMutation::ForgetHistory(
-            "secret token".to_string()
+            q_core::PromptSource::inline("secret token").unwrap()
         )))
     );
     let texts: Vec<_> = app
         .search_results()
         .iter()
-        .map(|entry| entry.text.clone())
+        .filter_map(|entry| entry.inline_text().map(str::to_string))
         .collect();
     assert_eq!(texts, vec!["keep me".to_string()]);
     assert_eq!(app.search.as_ref().unwrap().selected, 0);
@@ -372,7 +411,7 @@ fn fold_cache_stays_in_step_with_history() {
     assert!(app
         .search_results()
         .iter()
-        .all(|entry| entry.text != "улучшить конфиги"));
+        .all(|entry| entry.inline_text() != Some("улучшить конфиги")));
 
     // The cache still serves the remaining entry correctly.
     for _ in 0.."uluchshit".len() {
@@ -382,7 +421,7 @@ fn fold_cache_stays_in_step_with_history() {
         reduce(&mut app, Input::Char(c));
     }
     assert_eq!(app.search_results().len(), 1);
-    assert_eq!(app.search_results()[0].text, "second prompt");
+    assert_eq!(app.search_results()[0].inline_text(), Some("second prompt"));
 }
 
 #[test]
@@ -522,7 +561,7 @@ fn composer_enter_saves_prompt_in_active_tab() {
     assert!(matches!(
         effect,
         Some(Effect::Persist(QueueMutation::Add { tab_id: id, prompt }))
-            if id == tab_id && prompt.text == "hi"
+            if id == tab_id && prompt.inline_text() == Some("hi")
     ));
     assert_eq!(app.visible_prompts().len(), 1);
 }
@@ -535,4 +574,114 @@ fn composer_paste_is_inserted_as_one_multiline_edit() {
     assert_eq!(app.composer.text(), "first\nsecond");
     reduce(&mut app, Input::Undo);
     assert_eq!(app.composer.text(), "");
+}
+
+#[test]
+fn queue_copy_reads_external_contents_at_operation_time() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let path = dir.path().join("live.md");
+    std::fs::write(&path, "cached").unwrap();
+    let mut workspace = Workspace::new();
+    let tab = workspace.first_tab_id();
+    let prompt = Prompt::from_external_markdown(path.clone()).unwrap();
+    let id = prompt.id;
+    workspace.add_prompt(tab, prompt).unwrap();
+    let mut app = App::new(workspace);
+    std::fs::write(&path, "current").unwrap();
+
+    assert_eq!(
+        reduce(&mut app, Input::Enter),
+        Some(Effect::CopyAndPersist {
+            text: "current".to_string(),
+            mutation: QueueMutation::Remove {
+                id,
+                expected_source: app.selected_prompt().unwrap().source().clone(),
+                expected_pinned: false,
+                expected_external_content: Some("current".to_string()),
+            },
+        })
+    );
+}
+
+#[test]
+fn d_requires_confirmation_and_only_requests_record_removal() {
+    let mut app = app_with(1);
+    let id = app.selected_prompt().unwrap().id;
+    let source = app.selected_prompt().unwrap().source().clone();
+
+    assert_eq!(reduce(&mut app, Input::Char('d')), None);
+    assert_eq!(
+        app.delete_prompt_dialog
+            .as_ref()
+            .map(|dialog| dialog.prompt_id),
+        Some(id)
+    );
+    assert_eq!(reduce(&mut app, Input::Esc), None);
+    assert!(app.workspace.get_prompt(id).is_some());
+
+    reduce(&mut app, Input::Char('d'));
+    assert_eq!(
+        reduce(&mut app, Input::Enter),
+        Some(Effect::Persist(QueueMutation::Remove {
+            id,
+            expected_source: source.clone(),
+            expected_pinned: false,
+            expected_external_content: None,
+        }))
+    );
+    assert!(app.workspace.get_prompt(id).is_some());
+    assert!(app
+        .workspace
+        .history()
+        .iter()
+        .any(|entry| entry.source() == &source));
+}
+
+#[test]
+fn inline_editor_requests_in_place_save_and_confirms_dirty_discard() {
+    let mut app = app_with(1);
+    let id = app.selected_prompt().unwrap().id;
+    reduce(&mut app, Input::Char('e'));
+    reduce(&mut app, Input::Char('!'));
+
+    let text = app.editor.as_ref().unwrap().buffer.text();
+    assert_eq!(
+        reduce(&mut app, Input::CtrlS),
+        Some(Effect::Persist(QueueMutation::EditInline {
+            id,
+            expected_source: PromptSource::Inline {
+                text: "prompt-0".to_string(),
+            },
+            expected_pinned: false,
+            text,
+        }))
+    );
+    assert_eq!(reduce(&mut app, Input::Esc), None);
+    assert!(app.editor.as_ref().unwrap().discard_confirmation);
+    assert_eq!(reduce(&mut app, Input::Esc), None);
+    assert!(!app.editor.as_ref().unwrap().discard_confirmation);
+    reduce(&mut app, Input::Esc);
+    reduce(&mut app, Input::Enter);
+    assert!(app.editor.is_none());
+    assert!(app.workspace.get_prompt(id).is_some());
+}
+
+#[test]
+fn external_editor_requests_runtime_save_without_writing_in_the_reducer() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let path = dir.path().join("document.md");
+    std::fs::write(&path, "original").unwrap();
+    let mut workspace = Workspace::new();
+    let tab = workspace.first_tab_id();
+    workspace
+        .add_prompt(tab, Prompt::from_external_markdown(path.clone()).unwrap())
+        .unwrap();
+    let mut app = App::new(workspace);
+
+    reduce(&mut app, Input::Char('e'));
+    reduce(&mut app, Input::Char('!'));
+
+    assert_eq!(reduce(&mut app, Input::CtrlS), Some(Effect::SaveExternal));
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "original");
+    assert_eq!(app.editor.as_ref().unwrap().buffer.text(), "original!");
 }

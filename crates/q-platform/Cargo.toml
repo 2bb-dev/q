@@ -15,6 +15,4 @@ fd-lock = { workspace = true }
 directories = { workspace = true }
 image = { workspace = true }
 chrono = { workspace = true }
-
-[dev-dependencies]
 tempfile = { workspace = true }

@@ -64,18 +64,20 @@ impl Queue {
         Ok(self.prompts.remove(pos))
     }
 
-    pub fn edit(&mut self, id: PromptId, new_text: impl Into<String>) -> Result<()> {
-        let new_text = new_text.into();
-        if new_text.trim().is_empty() {
-            return Err(CoreError::Invalid("prompt text is empty".into()));
-        }
-        let p = self
+    /// Replaces the contents of an inline prompt without changing its id or
+    /// metadata. External Markdown prompts must be edited through their file.
+    pub fn edit_inline(&mut self, id: PromptId, new_text: impl Into<String>) -> Result<()> {
+        let prompt = self
             .prompts
             .iter_mut()
-            .find(|p| p.id == id)
+            .find(|prompt| prompt.id == id)
             .ok_or_else(|| CoreError::NotFound(id.to_string()))?;
-        p.text = new_text;
-        Ok(())
+        prompt.replace_inline_text(new_text)
+    }
+
+    /// Backwards-compatible name for [`Queue::edit_inline`].
+    pub fn edit(&mut self, id: PromptId, new_text: impl Into<String>) -> Result<()> {
+        self.edit_inline(id, new_text)
     }
 
     pub fn set_pinned(&mut self, id: PromptId, pinned: bool) -> Result<()> {

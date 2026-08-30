@@ -4,6 +4,8 @@ pub mod history;
 pub mod list;
 pub mod pin;
 pub mod pop;
+pub mod remove;
+mod source;
 pub mod tui;
 
 use anyhow::Result;

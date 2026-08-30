@@ -11,8 +11,14 @@ fn q(dir: &TempDir) -> Command {
 #[test]
 fn pop_next_stdout_prints_and_removes_newest_unpinned() {
     let dir = TempDir::new().unwrap();
-    q(&dir).args(["add", "first"]).assert().success();
-    q(&dir).args(["add", "second"]).assert().success();
+    q(&dir)
+        .args(["add", "--tab", "1", "first"])
+        .assert()
+        .success();
+    q(&dir)
+        .args(["add", "--tab", "1", "second"])
+        .assert()
+        .success();
     q(&dir)
         .args(["pop", "--next", "--stdout"])
         .assert()
@@ -28,8 +34,14 @@ fn pop_next_stdout_prints_and_removes_newest_unpinned() {
 #[test]
 fn pop_skips_pinned_prompts() {
     let dir = TempDir::new().unwrap();
-    q(&dir).args(["add", "pinned", "--pin"]).assert().success();
-    q(&dir).args(["add", "floating"]).assert().success();
+    q(&dir)
+        .args(["add", "--tab", "1", "pinned", "--pin"])
+        .assert()
+        .success();
+    q(&dir)
+        .args(["add", "--tab", "1", "floating"])
+        .assert()
+        .success();
     q(&dir)
         .args(["pop", "--next", "--stdout"])
         .assert()
@@ -44,7 +56,10 @@ fn pop_skips_pinned_prompts() {
 #[test]
 fn pop_by_id_removes_that_prompt_even_if_pinned() {
     let dir = TempDir::new().unwrap();
-    q(&dir).args(["add", "target", "--pin"]).assert().success();
+    q(&dir)
+        .args(["add", "--tab", "1", "target", "--pin"])
+        .assert()
+        .success();
     let out = q(&dir).args(["list"]).output().unwrap();
     let stdout = String::from_utf8(out.stdout).unwrap();
     let id = stdout

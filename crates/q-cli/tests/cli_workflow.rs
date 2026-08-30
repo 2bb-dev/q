@@ -44,9 +44,12 @@ fn full_user_journey_persists_across_commands() {
         .failure();
 
     // Add two unpinned prompts (arg + stdin), newline-trimmed.
-    q(&dir).args(["add", "first prompt"]).assert().success();
     q(&dir)
-        .args(["add"])
+        .args(["add", "--tab", "1", "first prompt"])
+        .assert()
+        .success();
+    q(&dir)
+        .args(["add", "--tab", "1"])
         .write_stdin("second prompt\n")
         .assert()
         .success();
@@ -85,7 +88,7 @@ fn full_user_journey_persists_across_commands() {
 
     // Add a pinned prompt; list now shows both and the pinned marker.
     q(&dir)
-        .args(["add", "sticky note", "--pin"])
+        .args(["add", "--tab", "1", "sticky note", "--pin"])
         .assert()
         .success();
     q(&dir)
@@ -125,6 +128,8 @@ fn full_user_journey_persists_across_commands() {
     let arr = parsed.as_array().expect("list --json must be an array");
     assert_eq!(arr.len(), 1);
     assert_eq!(arr[0]["text"], "sticky note");
+    assert_eq!(arr[0]["source"]["type"], "inline");
+    assert_eq!(arr[0]["available"], true);
     assert!(
         !arr[0]["pinned"].as_bool().unwrap(),
         "sticky should now be unpinned"

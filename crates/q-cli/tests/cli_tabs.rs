@@ -19,12 +19,11 @@ fn workspace_with_two_tabs(dir: &TempDir) -> (q_core::TabId, q_core::TabId) {
 }
 
 #[test]
-fn contextual_commands_require_tab_when_multiple_exist() {
+fn contextual_commands_other_than_add_require_tab_when_multiple_exist() {
     let dir = TempDir::new().unwrap();
     workspace_with_two_tabs(&dir);
 
     for args in [
-        vec!["add", "prompt"],
         vec!["list"],
         vec!["copy", "--next", "--stdout"],
         vec!["pop", "--next", "--stdout"],
