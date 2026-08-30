@@ -700,6 +700,7 @@ fn open_workspaces_with(app: &mut App, names: &[&str]) {
             dir: std::path::PathBuf::from(format!("/tmp/ws/{name}")),
             name: name.to_string(),
             current: index == 0,
+            team: false,
         })
         .collect();
     app.open_workspaces(entries);
@@ -788,7 +789,10 @@ fn create_mode_collects_a_name_and_requests_creation() {
     reduce(&mut app, Input::Backspace);
     assert_eq!(
         reduce(&mut app, Input::Enter),
-        Some(Effect::CreateWorkspace("tea".to_string()))
+        Some(Effect::CreateWorkspace {
+            name: "tea".to_string(),
+            team: false
+        })
     );
 }
 
@@ -812,6 +816,7 @@ fn info_dialog_renames_and_deletes_the_selected_workspace() {
     );
 
     reduce(&mut app, Input::Esc); // back to info view
+    reduce(&mut app, Input::Down); // select Make team workspace
     reduce(&mut app, Input::Down); // select Delete
     reduce(&mut app, Input::Enter); // confirm dialog
     assert_eq!(
@@ -828,6 +833,7 @@ fn info_delete_refuses_the_last_workspace() {
     open_workspaces_with(&mut app, &["personal"]);
 
     reduce(&mut app, Input::Char('i'));
+    reduce(&mut app, Input::Down); // select Make team workspace
     reduce(&mut app, Input::Down); // select Delete
     assert_eq!(reduce(&mut app, Input::Enter), None);
     let Some(MenuState::Workspaces(overlay)) = &app.menu else {
@@ -897,4 +903,79 @@ fn settings_d_disconnects_only_when_connected() {
         reduce(&mut app, Input::Char('d')),
         Some(Effect::GithubDisconnect)
     );
+}
+
+// --- Team workspace conversion ---
+
+#[test]
+fn t_opens_team_creation_and_enter_requests_a_team_workspace() {
+    let mut app = app_with(1);
+    open_workspaces_with(&mut app, &["personal"]);
+
+    reduce(&mut app, Input::Char('t'));
+    for c in "crew".chars() {
+        reduce(&mut app, Input::Char(c));
+    }
+    assert_eq!(
+        reduce(&mut app, Input::Enter),
+        Some(Effect::CreateWorkspace {
+            name: "crew".to_string(),
+            team: true,
+        })
+    );
+}
+
+#[test]
+fn convert_action_fetches_owners_then_requests_conversion() {
+    let mut app = app_with(1);
+    open_workspaces_with(&mut app, &["personal"]);
+
+    reduce(&mut app, Input::Char('i'));
+    reduce(&mut app, Input::Down); // Make team workspace
+    assert_eq!(
+        reduce(&mut app, Input::Enter),
+        Some(Effect::FetchRepoOwners)
+    );
+
+    // Owners arrive (runtime does this); pick the org.
+    let Some(MenuState::Workspaces(overlay)) = app.menu.as_mut() else {
+        panic!("workspaces overlay expected");
+    };
+    let WorkspacesMode::Info(info) = &mut overlay.mode else {
+        panic!("info dialog expected");
+    };
+    info.mode = InfoMode::SelectOwner {
+        owners: vec![None, Some("2bb-dev".to_string())],
+        selected: 0,
+    };
+    reduce(&mut app, Input::Down);
+    assert_eq!(
+        reduce(&mut app, Input::Enter),
+        Some(Effect::ConvertToTeam {
+            dir: std::path::PathBuf::from("/tmp/ws/personal"),
+            org: Some("2bb-dev".to_string()),
+        })
+    );
+}
+
+#[test]
+fn team_workspaces_offer_no_convert_action() {
+    let mut app = app_with(1);
+    let entries = vec![WorkspaceEntry {
+        dir: std::path::PathBuf::from("/tmp/ws/crew"),
+        name: "crew".to_string(),
+        current: true,
+        team: true,
+    }];
+    app.open_workspaces(entries);
+
+    reduce(&mut app, Input::Char('i'));
+    reduce(&mut app, Input::Down); // should land on Delete directly
+    let Some(MenuState::Workspaces(overlay)) = &app.menu else {
+        panic!("workspaces overlay expected");
+    };
+    let WorkspacesMode::Info(info) = &overlay.mode else {
+        panic!("info dialog expected");
+    };
+    assert_eq!(info.action, InfoAction::Delete);
 }

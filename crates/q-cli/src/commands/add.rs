@@ -1,7 +1,7 @@
 use std::io::Read;
 use std::path::Path;
 
-use anyhow::Result;
+use anyhow::{bail, Result};
 use q_core::Prompt;
 use q_platform::external_document::{absolute_path, read_utf8};
 
@@ -29,6 +29,15 @@ pub fn run(
     };
     prompt.set_pinned(pin);
     prompt.created_by = q_platform::github::cached_login().ok().flatten();
+
+    if prompt.external_markdown_path().is_some() {
+        let dir = super::resolve_workspace_dir(workspace)?;
+        if q_platform::git::is_repo(&dir) {
+            bail!(
+                "team workspaces accept inline prompts only; pass --text to add the literal text"
+            );
+        }
+    }
 
     let id = with_workspace_mut(workspace, |workspace| {
         let tab_id = workspace.resolve_tab(tab)?;

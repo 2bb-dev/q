@@ -5,6 +5,7 @@
 
 pub mod clipboard;
 pub mod external_document;
+pub mod git;
 pub mod github;
 pub mod lock;
 pub mod paths;

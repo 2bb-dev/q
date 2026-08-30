@@ -109,7 +109,10 @@ pub enum Effect {
     Status(String),
     OpenWorkspacesOverlay,
     SwitchWorkspace(PathBuf),
-    CreateWorkspace(String),
+    CreateWorkspace {
+        name: String,
+        team: bool,
+    },
     RenameWorkspace {
         dir: PathBuf,
         name: String,
@@ -118,6 +121,11 @@ pub enum Effect {
     RefreshGithubStatus,
     GithubConnect,
     GithubDisconnect,
+    FetchRepoOwners,
+    ConvertToTeam {
+        dir: PathBuf,
+        org: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -154,26 +162,55 @@ pub struct WorkspaceEntry {
     pub name: String,
     /// Whether this window is currently on this workspace.
     pub current: bool,
+    /// Whether this is a team workspace (a git repository).
+    pub team: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WorkspacesMode {
     List,
-    Create { value: String },
+    Create { value: String, team: bool },
     Info(WorkspaceInfo),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InfoAction {
     Rename,
+    ConvertToTeam,
     Delete,
+}
+
+impl InfoAction {
+    /// Actions available for an entry, in display order.
+    pub fn available(team: bool) -> &'static [InfoAction] {
+        if team {
+            &[InfoAction::Rename, InfoAction::Delete]
+        } else {
+            &[
+                InfoAction::Rename,
+                InfoAction::ConvertToTeam,
+                InfoAction::Delete,
+            ]
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InfoMode {
     View,
-    Rename { value: String },
+    Rename {
+        value: String,
+    },
     ConfirmDelete,
+    /// Fetching the possible repo owners (user + orgs) from GitHub.
+    LoadingOwners,
+    /// Choosing who owns the auto-created private repo. `None` = the user.
+    SelectOwner {
+        owners: Vec<Option<String>>,
+        selected: usize,
+    },
+    /// Repo creation and initial push are running in the background.
+    Converting,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

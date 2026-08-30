@@ -164,6 +164,13 @@ fn reduce_menu(app: &mut App, input: Input) -> Option<Effect> {
                     Input::Char('n') => {
                         overlay.mode = WorkspacesMode::Create {
                             value: String::new(),
+                            team: false,
+                        };
+                    }
+                    Input::Char('t') => {
+                        overlay.mode = WorkspacesMode::Create {
+                            value: String::new(),
+                            team: true,
                         };
                     }
                     Input::Char('i') if overlay.selected_entry().is_some() => {
@@ -174,25 +181,36 @@ fn reduce_menu(app: &mut App, input: Input) -> Option<Effect> {
                     }
                     _ => {}
                 },
-                WorkspacesMode::Create { value } => match input {
+                WorkspacesMode::Create { value, team } => match input {
                     Input::Esc => overlay.mode = WorkspacesMode::List,
                     Input::Char(c) => value.push(c),
                     Input::Backspace => {
                         value.pop();
                     }
                     Input::Enter => {
-                        return Some(Effect::CreateWorkspace(value.clone()));
+                        return Some(Effect::CreateWorkspace {
+                            name: value.clone(),
+                            team: *team,
+                        });
                     }
                     _ => {}
                 },
                 WorkspacesMode::Info(info) => match &mut info.mode {
                     InfoMode::View => match input {
                         Input::Esc => overlay.mode = WorkspacesMode::List,
-                        Input::Up | Input::Down | Input::Tab | Input::Char('j' | 'k') => {
-                            info.action = match info.action {
-                                InfoAction::Rename => InfoAction::Delete,
-                                InfoAction::Delete => InfoAction::Rename,
-                            };
+                        Input::Up | Input::Char('k') => {
+                            let team = overlay
+                                .entries
+                                .get(overlay.selected)
+                                .is_some_and(|entry| entry.team);
+                            info.action = cycle_info_action(info.action, team, -1);
+                        }
+                        Input::Down | Input::Tab | Input::Char('j') => {
+                            let team = overlay
+                                .entries
+                                .get(overlay.selected)
+                                .is_some_and(|entry| entry.team);
+                            info.action = cycle_info_action(info.action, team, 1);
                         }
                         Input::Enter => match info.action {
                             InfoAction::Rename => {
@@ -205,6 +223,10 @@ fn reduce_menu(app: &mut App, input: Input) -> Option<Effect> {
                                     info.mode = InfoMode::Rename { value };
                                 }
                             }
+                            InfoAction::ConvertToTeam => {
+                                info.mode = InfoMode::LoadingOwners;
+                                return Some(Effect::FetchRepoOwners);
+                            }
                             InfoAction::Delete => {
                                 if overlay.entries.len() == 1 {
                                     overlay.error = "cannot delete the last workspace".to_string();
@@ -213,6 +235,25 @@ fn reduce_menu(app: &mut App, input: Input) -> Option<Effect> {
                                 }
                             }
                         },
+                        _ => {}
+                    },
+                    InfoMode::LoadingOwners | InfoMode::Converting => {
+                        if matches!(input, Input::Esc) {
+                            info.mode = InfoMode::View;
+                        }
+                    }
+                    InfoMode::SelectOwner { owners, selected } => match input {
+                        Input::Esc => info.mode = InfoMode::View,
+                        Input::Up | Input::Char('k') => *selected = selected.saturating_sub(1),
+                        Input::Down | Input::Char('j') => {
+                            *selected = (*selected + 1).min(owners.len().saturating_sub(1));
+                        }
+                        Input::Enter => {
+                            let org = owners.get(*selected).cloned().flatten();
+                            info.mode = InfoMode::Converting;
+                            let dir = overlay.entries.get(overlay.selected)?.dir.clone();
+                            return Some(Effect::ConvertToTeam { dir, org });
+                        }
                         _ => {}
                     },
                     InfoMode::Rename { value } => match input {
@@ -241,6 +282,18 @@ fn reduce_menu(app: &mut App, input: Input) -> Option<Effect> {
         }
     }
     None
+}
+
+/// Moves the info-dialog selection through the actions available for the
+/// entry, clamping at the ends.
+fn cycle_info_action(current: InfoAction, team: bool, delta: i32) -> InfoAction {
+    let actions = InfoAction::available(team);
+    let index = actions
+        .iter()
+        .position(|action| *action == current)
+        .unwrap_or(0);
+    let target = (index as i32 + delta).clamp(0, actions.len() as i32 - 1) as usize;
+    actions[target]
 }
 
 fn reduce_editor(app: &mut App, input: Input) -> Option<Effect> {
