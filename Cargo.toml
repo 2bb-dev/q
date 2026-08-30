@@ -31,7 +31,6 @@ clap = { version = "4", features = ["derive"] }
 arboard = "3"
 fd-lock = "4"
 directories = "5"
-image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
 
 # TUI
 ratatui = { version = "0.30", default-features = false, features = ["crossterm", "underline-color"] }

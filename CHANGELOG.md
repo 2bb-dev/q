@@ -13,6 +13,7 @@ All notable changes to this project will be documented in this file.
 
 ### Removed
 - Removed the composer placeholder text
+- Removed the dormant image attachment support, including image storage, the images directory, and image-clipboard code ([#5](https://github.com/2bb-dev/q/issues/5))
 
 ### Added
 - Added live `.md` and `.markdown` references through `q add --tab <name> <path>`, including current-content copy, pop, preview, history search, availability-aware JSON, and `--text` for literal Markdown-looking input
