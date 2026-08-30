@@ -47,6 +47,8 @@ struct TabFile {
     id: TabId,
     name: String,
     activity_at: DateTime<Utc>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    created_by: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -166,7 +168,7 @@ pub fn load_dir(dir: &Path) -> Result<Workspace> {
         .into_iter()
         .map(|tab| {
             let queue = queues.remove(&tab.id).unwrap_or_default();
-            Tab::from_parts(tab.id, tab.name, tab.activity_at, queue)
+            Tab::from_parts(tab.id, tab.name, tab.activity_at, tab.created_by, queue)
         })
         .collect();
 
@@ -211,6 +213,7 @@ pub fn save_dir(dir: &Path, workspace: &Workspace) -> Result<()> {
                 id: tab.id(),
                 name: tab.name().to_string(),
                 activity_at: tab.activity_at(),
+                created_by: tab.created_by().map(str::to_string),
             },
         )?;
         keep_tabs.insert(file_name);

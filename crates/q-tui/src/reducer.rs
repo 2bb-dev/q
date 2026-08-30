@@ -558,7 +558,10 @@ fn confirm_dialog(app: &mut App) -> Option<Effect> {
         TabDialogMode::Create => {
             let id = TabId::new();
             let activity_at = Utc::now();
-            if let Err(error) = app.workspace.create_tab_with(id, name.clone(), activity_at) {
+            if let Err(error) =
+                app.workspace
+                    .create_tab_with(id, name.clone(), activity_at, app.identity.clone())
+            {
                 dialog.error = error.to_string();
                 app.tab_dialog = Some(dialog);
                 return None;
@@ -705,7 +708,8 @@ fn reduce_composer(app: &mut App, input: Input) -> Option<Effect> {
             if text.is_empty() {
                 return None;
             }
-            let prompt = Prompt::new(text).ok()?;
+            let mut prompt = Prompt::new(text).ok()?;
+            prompt.created_by = app.identity.clone();
             let id = prompt.id;
             let tab_id = app.active_tab_id;
             app.workspace.add_prompt(tab_id, prompt.clone()).ok()?;

@@ -29,6 +29,10 @@ pub struct Tab {
     id: TabId,
     name: String,
     activity_at: DateTime<Utc>,
+    /// GitHub login of whoever created the tab, when an identity was
+    /// connected at the time.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    created_by: Option<String>,
     queue: Queue,
 }
 
@@ -37,18 +41,24 @@ impl Tab {
         id: TabId,
         name: String,
         activity_at: DateTime<Utc>,
+        created_by: Option<String>,
         queue: Queue,
     ) -> Self {
         Self {
             id,
             name,
             activity_at,
+            created_by,
             queue,
         }
     }
 
     pub fn id(&self) -> TabId {
         self.id
+    }
+
+    pub fn created_by(&self) -> Option<&str> {
+        self.created_by.as_deref()
     }
 
     pub fn name(&self) -> &str {
@@ -134,6 +144,7 @@ impl Workspace {
                 id: TabId::initial(),
                 name: "1".to_string(),
                 activity_at,
+                created_by: None,
                 queue: Queue::new(),
             }],
             history: Vec::new(),
@@ -167,6 +178,7 @@ impl Workspace {
                 id: TabId::initial(),
                 name: "1".to_string(),
                 activity_at,
+                created_by: None,
                 queue,
             }],
             history: Vec::new(),
@@ -289,7 +301,7 @@ impl Workspace {
     }
 
     pub fn create_tab(&mut self, name: impl Into<String>) -> Result<TabId> {
-        self.create_tab_with(TabId::new(), name, Utc::now())
+        self.create_tab_with(TabId::new(), name, Utc::now(), None)
     }
 
     pub fn create_tab_with(
@@ -297,6 +309,7 @@ impl Workspace {
         id: TabId,
         name: impl Into<String>,
         activity_at: DateTime<Utc>,
+        created_by: Option<String>,
     ) -> Result<TabId> {
         if self.tabs.iter().any(|tab| tab.id == id) {
             return Err(CoreError::InvalidTab(format!(
@@ -309,6 +322,7 @@ impl Workspace {
             id,
             name,
             activity_at,
+            created_by,
             queue: Queue::new(),
         });
         self.normalize();
@@ -381,7 +395,13 @@ impl Workspace {
 
     /// Edits an inline prompt in place and records the new contents in
     /// history. The prior inline source remains as a separate history entry.
-    pub fn edit_prompt_inline(&mut self, id: PromptId, new_text: impl Into<String>) -> Result<()> {
+    /// `editor` is the GitHub login of whoever edited, when known.
+    pub fn edit_prompt_inline(
+        &mut self,
+        id: PromptId,
+        new_text: impl Into<String>,
+        editor: Option<String>,
+    ) -> Result<()> {
         let edited_at = Utc::now();
         let tab = self
             .tabs
@@ -389,12 +409,13 @@ impl Workspace {
             .find(|tab| tab.queue.get(id).is_some())
             .ok_or_else(|| CoreError::NotFound(id.to_string()))?;
         tab.queue.edit_inline(id, new_text)?;
-        let source = tab
+        let prompt = tab
             .queue
-            .get(id)
-            .ok_or_else(|| CoreError::NotFound(id.to_string()))?
-            .source()
-            .clone();
+            .get_mut(id)
+            .ok_or_else(|| CoreError::NotFound(id.to_string()))?;
+        prompt.updated_at = Some(edited_at);
+        prompt.updated_by = editor;
+        let source = prompt.source().clone();
         tab.activity_at = tab.activity_at.max(edited_at);
         self.record_history(source, edited_at);
         self.normalize();

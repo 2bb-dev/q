@@ -35,6 +35,7 @@ const KEYBOARD_ENHANCEMENTS: KeyboardEnhancementFlags =
 pub fn run(workspace_dir: &Path) -> Result<()> {
     let queue = q_core::storage::load_dir(workspace_dir)?;
     let mut app = App::new(queue);
+    app.identity = q_platform::github::cached_login().ok().flatten();
     let mut clipboard = SystemClipboard::new()?;
 
     let mut terminal = TerminalSession::new()?;
@@ -62,6 +63,17 @@ fn event_loop(
     loop {
         sync.refresh_if_due(app, &workspace_dir);
         while let Ok(state) = github_rx.try_recv() {
+            match &state {
+                GithubAuthState::Connected { login, .. } => {
+                    app.identity = Some(login.clone());
+                    let _ = q_platform::github::store_cached_login(login);
+                }
+                GithubAuthState::NotConnected => {
+                    app.identity = None;
+                    let _ = q_platform::github::clear_cached_login();
+                }
+                _ => {}
+            }
             app.github = state;
         }
 
@@ -170,7 +182,11 @@ enum MutationOutcome {
     Rejected(q_core::Workspace, String),
 }
 
-fn commit_mutation(workspace_dir: &Path, mutation: &QueueMutation) -> Result<MutationOutcome> {
+fn commit_mutation(
+    workspace_dir: &Path,
+    mutation: &QueueMutation,
+    identity: Option<&str>,
+) -> Result<MutationOutcome> {
     let document_lock_path = match mutation {
         QueueMutation::Remove {
             expected_source: q_core::PromptSource::ExternalMarkdown { path },
@@ -191,40 +207,47 @@ fn commit_mutation(workspace_dir: &Path, mutation: &QueueMutation) -> Result<Mut
     let _guard = lock.write()?;
     let mut workspace = q_core::storage::load_dir(workspace_dir)?;
 
-    let result = match mutation {
-        QueueMutation::Add { tab_id, prompt } => {
-            workspace.add_prompt(*tab_id, prompt.clone()).map(|_| ())
-        }
-        QueueMutation::Remove {
-            id,
-            expected_source,
-            expected_pinned,
-            expected_external_content,
-        } => verify_prompt_state(&workspace, *id, expected_source, *expected_pinned)
-            .and_then(|()| verify_external_content(expected_source, expected_external_content))
-            .and_then(|()| workspace.remove_prompt(*id).map(|_| ())),
-        QueueMutation::EditInline {
-            id,
-            expected_source,
-            expected_pinned,
-            text,
-        } => verify_prompt_state(&workspace, *id, expected_source, *expected_pinned)
-            .and_then(|()| workspace.edit_prompt_inline(*id, text.clone())),
-        QueueMutation::SetPinned { id, pinned } => workspace.set_prompt_pinned(*id, *pinned),
-        QueueMutation::CreateTab {
-            id,
-            name,
-            activity_at,
-        } => workspace
-            .create_tab_with(*id, name.clone(), *activity_at)
-            .map(|_| ()),
-        QueueMutation::RenameTab { id, name } => workspace.rename_tab(*id, name.clone()),
-        QueueMutation::CloseTab(id) => workspace.close_tab(*id),
-        QueueMutation::ForgetHistory(source) => {
-            workspace.forget_history(source);
-            Ok(())
-        }
-    };
+    let result =
+        match mutation {
+            QueueMutation::Add { tab_id, prompt } => {
+                workspace.add_prompt(*tab_id, prompt.clone()).map(|_| ())
+            }
+            QueueMutation::Remove {
+                id,
+                expected_source,
+                expected_pinned,
+                expected_external_content,
+            } => verify_prompt_state(&workspace, *id, expected_source, *expected_pinned)
+                .and_then(|()| verify_external_content(expected_source, expected_external_content))
+                .and_then(|()| workspace.remove_prompt(*id).map(|_| ())),
+            QueueMutation::EditInline {
+                id,
+                expected_source,
+                expected_pinned,
+                text,
+            } => verify_prompt_state(&workspace, *id, expected_source, *expected_pinned).and_then(
+                |()| workspace.edit_prompt_inline(*id, text.clone(), identity.map(str::to_string)),
+            ),
+            QueueMutation::SetPinned { id, pinned } => workspace.set_prompt_pinned(*id, *pinned),
+            QueueMutation::CreateTab {
+                id,
+                name,
+                activity_at,
+            } => workspace
+                .create_tab_with(
+                    *id,
+                    name.clone(),
+                    *activity_at,
+                    identity.map(str::to_string),
+                )
+                .map(|_| ()),
+            QueueMutation::RenameTab { id, name } => workspace.rename_tab(*id, name.clone()),
+            QueueMutation::CloseTab(id) => workspace.close_tab(*id),
+            QueueMutation::ForgetHistory(source) => {
+                workspace.forget_history(source);
+                Ok(())
+            }
+        };
     if let Err(error) = result {
         return Ok(MutationOutcome::Rejected(workspace, error.to_string()));
     }
@@ -273,7 +296,8 @@ fn verify_external_content(
 }
 
 fn persist_mutation(app: &mut App, workspace_dir: &Path, mutation: &QueueMutation) -> Result<bool> {
-    match commit_mutation(workspace_dir, mutation)? {
+    let identity = app.identity.clone();
+    match commit_mutation(workspace_dir, mutation, identity.as_deref())? {
         MutationOutcome::Committed(workspace) => {
             let close_editor = match mutation {
                 QueueMutation::EditInline { id, .. } => {

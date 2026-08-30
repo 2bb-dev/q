@@ -15,6 +15,7 @@ use thiserror::Error;
 use crate::paths::app_dir;
 
 const TOKEN_FILE: &str = "github_token";
+const USER_FILE: &str = "github_user";
 const USER_AGENT: &str = concat!("q-cli/", env!("CARGO_PKG_VERSION"));
 pub const SCOPE: &str = "repo";
 
@@ -77,6 +78,32 @@ pub fn delete_token() -> std::io::Result<bool> {
     match std::fs::remove_file(&path) {
         Ok(()) => Ok(true),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(error),
+    }
+}
+
+/// Login cached from the last successful GitHub connection. Used for
+/// attribution without a network round-trip.
+pub fn cached_login() -> std::io::Result<Option<String>> {
+    let path = app_dir()?.join(USER_FILE);
+    match std::fs::read_to_string(&path) {
+        Ok(login) => {
+            let login = login.trim().to_string();
+            Ok((!login.is_empty()).then_some(login))
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error),
+    }
+}
+
+pub fn store_cached_login(login: &str) -> std::io::Result<()> {
+    std::fs::write(app_dir()?.join(USER_FILE), format!("{login}\n"))
+}
+
+pub fn clear_cached_login() -> std::io::Result<()> {
+    match std::fs::remove_file(app_dir()?.join(USER_FILE)) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(error) => Err(error),
     }
 }

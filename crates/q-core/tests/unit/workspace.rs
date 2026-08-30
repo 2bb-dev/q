@@ -23,7 +23,7 @@ fn rename_preserves_tab_data_and_order() {
     let now = Utc::now();
     let mut workspace = Workspace::with_initial_activity(now);
     let id = workspace
-        .create_tab_with(TabId::new(), "work", now + Duration::seconds(1))
+        .create_tab_with(TabId::new(), "work", now + Duration::seconds(1), None)
         .unwrap();
     let prompt = Prompt::new("hello").unwrap();
     let prompt_id = prompt.id;
@@ -46,7 +46,7 @@ fn adding_prompt_moves_tab_first() {
     let now = Utc::now();
     let mut workspace = Workspace::with_initial_activity(now);
     let second = workspace
-        .create_tab_with(TabId::new(), "second", now + Duration::seconds(1))
+        .create_tab_with(TabId::new(), "second", now + Duration::seconds(1), None)
         .unwrap();
     let first = workspace.resolve_tab("1").unwrap();
     assert_eq!(workspace.first_tab_id(), second);
@@ -91,7 +91,7 @@ fn out_of_order_prompt_add_does_not_regress_tab_activity() {
     let mut workspace = Workspace::with_initial_activity(now);
     let first = workspace.first_tab_id();
     let second = workspace
-        .create_tab_with(TabId::new(), "second", now + Duration::seconds(5))
+        .create_tab_with(TabId::new(), "second", now + Duration::seconds(5), None)
         .unwrap();
     let mut newer = Prompt::new("newer").unwrap();
     newer.created_at = now + Duration::seconds(10);
@@ -204,7 +204,7 @@ fn workspace_inline_edit_records_new_history_and_retains_old_text() {
     let created_at = prompt.created_at;
     workspace.add_prompt(tab, prompt).unwrap();
 
-    workspace.edit_prompt_inline(id, "after").unwrap();
+    workspace.edit_prompt_inline(id, "after", None).unwrap();
 
     let edited = workspace.get_prompt(id).unwrap();
     assert_eq!(edited.id, id);
@@ -228,7 +228,9 @@ fn workspace_inline_edit_rejects_an_external_source_without_new_history() {
         .add_prompt(tab, Prompt::from_external_markdown(&path).unwrap())
         .unwrap();
 
-    assert!(workspace.edit_prompt_inline(id, "inline now").is_err());
+    assert!(workspace
+        .edit_prompt_inline(id, "inline now", None)
+        .is_err());
     assert_eq!(workspace.history().len(), 1);
     assert_eq!(
         workspace.get_prompt(id).unwrap().external_markdown_path(),
@@ -385,4 +387,48 @@ fn prompt_operations_find_owning_tab_globally() {
         "global"
     );
     assert!(workspace.get_prompt(id).is_none());
+}
+
+#[test]
+fn attribution_is_recorded_on_tab_create_and_prompt_edit() {
+    let mut workspace = Workspace::new();
+    let tab = workspace
+        .create_tab_with(
+            TabId::new(),
+            "team",
+            Utc::now(),
+            Some("octocat".to_string()),
+        )
+        .unwrap();
+    assert_eq!(workspace.tab(tab).unwrap().created_by(), Some("octocat"));
+
+    let mut prompt = Prompt::new("draft").unwrap();
+    prompt.created_by = Some("octocat".to_string());
+    let id = workspace.add_prompt(tab, prompt).unwrap();
+
+    workspace
+        .edit_prompt_inline(id, "final", Some("hubber".to_string()))
+        .unwrap();
+    let edited = workspace.get_prompt(id).unwrap();
+    assert_eq!(edited.created_by.as_deref(), Some("octocat"));
+    assert_eq!(edited.updated_by.as_deref(), Some("hubber"));
+    assert!(edited.updated_at.is_some());
+}
+
+#[test]
+fn attribution_stays_empty_without_an_identity() {
+    let mut workspace = Workspace::new();
+    let tab = workspace.first_tab_id();
+    let id = workspace
+        .add_prompt(tab, Prompt::new("anonymous").unwrap())
+        .unwrap();
+    workspace
+        .edit_prompt_inline(id, "still anonymous", None)
+        .unwrap();
+
+    let prompt = workspace.get_prompt(id).unwrap();
+    assert_eq!(prompt.created_by, None);
+    assert_eq!(prompt.updated_by, None);
+    assert!(prompt.updated_at.is_some());
+    assert_eq!(workspace.tab(tab).unwrap().created_by(), None);
 }

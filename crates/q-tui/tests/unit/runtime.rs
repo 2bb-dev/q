@@ -649,7 +649,7 @@ fn concurrent_add_transactions_preserve_both_prompts() {
             let prompt = q_core::Prompt::new(text).unwrap();
             let tab_id = q_core::Workspace::new().first_tab_id();
             barrier.wait();
-            commit_mutation(&path, &QueueMutation::Add { tab_id, prompt }).unwrap();
+            commit_mutation(&path, &QueueMutation::Add { tab_id, prompt }, None).unwrap();
         }));
     }
 
@@ -677,7 +677,7 @@ fn close_tab_mutation_is_persisted() {
     let closed = workspace.create_tab("closed").unwrap();
     q_core::storage::save_dir(&queue_path, &workspace).unwrap();
 
-    let outcome = commit_mutation(&queue_path, &QueueMutation::CloseTab(closed)).unwrap();
+    let outcome = commit_mutation(&queue_path, &QueueMutation::CloseTab(closed), None).unwrap();
 
     assert!(matches!(outcome, MutationOutcome::Committed(_)));
     let persisted = q_core::storage::load_dir(&queue_path).unwrap();
@@ -694,15 +694,15 @@ fn stale_mutation_returns_latest_queue_as_conflict() {
     let expected_source = prompt.source().clone();
 
     let tab_id = q_core::Workspace::new().first_tab_id();
-    commit_mutation(&queue_path, &QueueMutation::Add { tab_id, prompt }).unwrap();
+    commit_mutation(&queue_path, &QueueMutation::Add { tab_id, prompt }, None).unwrap();
     let removal = QueueMutation::Remove {
         id,
         expected_source,
         expected_pinned: false,
         expected_external_content: None,
     };
-    commit_mutation(&queue_path, &removal).unwrap();
-    let outcome = commit_mutation(&queue_path, &removal).unwrap();
+    commit_mutation(&queue_path, &removal, None).unwrap();
+    let outcome = commit_mutation(&queue_path, &removal, None).unwrap();
 
     assert!(matches!(outcome, MutationOutcome::Rejected(_, _)));
     assert!(q_core::storage::load_dir(&queue_path)
@@ -723,7 +723,7 @@ fn stale_inline_edit_and_remove_reject_the_latest_source() {
     workspace.add_prompt(tab, prompt).unwrap();
     q_core::storage::save_dir(&queue_path, &workspace).unwrap();
 
-    workspace.edit_prompt_inline(id, "newer").unwrap();
+    workspace.edit_prompt_inline(id, "newer", None).unwrap();
     q_core::storage::save_dir(&queue_path, &workspace).unwrap();
 
     let edit = commit_mutation(
@@ -734,6 +734,7 @@ fn stale_inline_edit_and_remove_reject_the_latest_source() {
             expected_pinned: false,
             text: "stale edit".to_string(),
         },
+        None,
     )
     .unwrap();
     let remove = commit_mutation(
@@ -744,6 +745,7 @@ fn stale_inline_edit_and_remove_reject_the_latest_source() {
             expected_pinned: false,
             expected_external_content: None,
         },
+        None,
     )
     .unwrap();
 
@@ -781,6 +783,7 @@ fn stale_pop_rejects_a_newly_pinned_prompt() {
             expected_pinned: false,
             expected_external_content: None,
         },
+        None,
     )
     .unwrap();
 
@@ -815,6 +818,7 @@ fn stale_external_pop_rejects_content_changed_after_copy() {
             expected_pinned: false,
             expected_external_content: Some("copied version".to_string()),
         },
+        None,
     )
     .unwrap();
 
@@ -869,7 +873,7 @@ fn inline_edit_commit_preserves_record_metadata_and_adds_typed_history() {
         expected_pinned: true,
         text: "after".to_string(),
     };
-    let outcome = commit_mutation(&queue_path, &mutation).unwrap();
+    let outcome = commit_mutation(&queue_path, &mutation, None).unwrap();
     assert!(matches!(outcome, MutationOutcome::Committed(_)));
     let saved = q_core::storage::load_dir(&queue_path).unwrap();
     let edited = saved.get_prompt(id).unwrap();
@@ -1006,6 +1010,7 @@ fn remove_commit_preserves_typed_history_and_external_source_file() {
             expected_pinned: false,
             expected_external_content: None,
         },
+        None,
     )
     .unwrap();
     let saved = q_core::storage::load_dir(&queue_path).unwrap();
@@ -1016,7 +1021,12 @@ fn remove_commit_preserves_typed_history_and_external_source_file() {
         .any(|entry| entry.source() == &source));
     assert_eq!(std::fs::read_to_string(source_path).unwrap(), "body");
 
-    commit_mutation(&queue_path, &QueueMutation::ForgetHistory(source.clone())).unwrap();
+    commit_mutation(
+        &queue_path,
+        &QueueMutation::ForgetHistory(source.clone()),
+        None,
+    )
+    .unwrap();
     let forgotten = q_core::storage::load_dir(&queue_path).unwrap();
     assert!(!forgotten
         .history()

@@ -28,6 +28,7 @@ pub fn run(
         }
     };
     prompt.set_pinned(pin);
+    prompt.created_by = q_platform::github::cached_login().ok().flatten();
 
     let id = with_workspace_mut(workspace, |workspace| {
         let tab_id = workspace.resolve_tab(tab)?;
