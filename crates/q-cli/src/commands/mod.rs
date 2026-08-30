@@ -122,6 +122,7 @@ pub(crate) fn with_workspace<T>(
     let dir = resolve_workspace_dir(override_name)?;
     let mut lock = FileLock::open(&dir.join(".lock"))?;
     let _guard = lock.write()?;
+    team_pull(&dir);
     let workspace = q_core::storage::load_dir(&dir)?;
     action(&workspace)
 }
@@ -133,8 +134,53 @@ pub(crate) fn with_workspace_mut<T>(
     let dir = resolve_workspace_dir(override_name)?;
     let mut lock = FileLock::open(&dir.join(".lock"))?;
     let _guard = lock.write()?;
+    team_pull(&dir);
     let mut workspace = q_core::storage::load_dir(&dir)?;
     let result = action(&mut workspace)?;
     q_core::storage::save_dir(&dir, &workspace)?;
+    team_push(&dir);
     Ok(result)
+}
+
+fn team_token() -> String {
+    q_platform::github::resolve_token()
+        .ok()
+        .flatten()
+        .map(|(token, _)| token)
+        .unwrap_or_default()
+}
+
+fn team_author() -> String {
+    q_platform::github::cached_login()
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| "q".to_string())
+}
+
+/// Pulls remote changes into a team workspace before a command runs.
+/// Failures (offline, auth) degrade to a warning; the command proceeds on
+/// the local state.
+fn team_pull(dir: &Path) {
+    if !q_platform::git::is_repo(dir) {
+        return;
+    }
+    if let Err(error) = q_platform::git::fetch_and_merge(dir, &team_token(), &team_author()) {
+        eprintln!("warning: workspace sync pull failed: {error}");
+    }
+}
+
+/// Commits and pushes local changes of a team workspace after a command.
+/// Failures degrade to a warning; changes stay committed locally.
+fn team_push(dir: &Path) {
+    if !q_platform::git::is_repo(dir) {
+        return;
+    }
+    match q_platform::git::commit_all(dir, &team_author(), "Update queue") {
+        Ok(_) => {
+            if let Err(error) = q_platform::git::push(dir, &team_token()) {
+                eprintln!("warning: workspace sync push failed: {error}");
+            }
+        }
+        Err(error) => eprintln!("warning: workspace commit failed: {error}"),
+    }
 }

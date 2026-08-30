@@ -28,6 +28,8 @@ const BLINK_ON_MS: u128 = 650;
 const INPUT_BATCH_BUDGET: Duration = Duration::from_millis(8);
 const SYNC_INTERVAL: Duration = Duration::from_millis(250);
 const FULL_RELOAD_INTERVAL: Duration = Duration::from_secs(2);
+const TEAM_FETCH_INTERVAL: Duration = Duration::from_secs(20);
+const TEAM_PUSH_DEBOUNCE: Duration = Duration::from_secs(3);
 const KEYBOARD_ENHANCEMENTS: KeyboardEnhancementFlags =
     KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
         .union(KeyboardEnhancementFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES)
@@ -63,7 +65,12 @@ fn event_loop(
         std::sync::mpsc::channel();
     loop {
         sync.refresh_if_due(app, &workspace_dir);
+        sync.drive_team_sync(&workspace_dir, &github_tx);
         while let Ok(event) = github_rx.try_recv() {
+            if let RuntimeEvent::SyncDone { error } = &event {
+                sync.sync_in_flight = false;
+                app.sync_error = error.clone();
+            }
             apply_runtime_event(app, event, &workspace_dir);
         }
 
@@ -112,6 +119,13 @@ struct QueueSync {
     fingerprint: Option<q_core::storage::DirFingerprint>,
     last_check: Instant,
     last_reload: Instant,
+    /// Whether the workspace is a team workspace (a git repository).
+    team: bool,
+    last_fetch: Instant,
+    /// When a debounced push should run, after local mutations.
+    push_due: Option<Instant>,
+    /// A fetch or push thread is running; do not start another.
+    sync_in_flight: bool,
 }
 
 impl QueueSync {
@@ -123,6 +137,61 @@ impl QueueSync {
                 .flatten(),
             last_check: now,
             last_reload: now - FULL_RELOAD_INTERVAL,
+            team: q_platform::git::is_repo(workspace_dir),
+            last_fetch: now,
+            push_due: None,
+            sync_in_flight: false,
+        }
+    }
+
+    /// Commits a local mutation and schedules a debounced push.
+    fn note_team_mutation(&mut self, workspace_dir: &Path, author: Option<&str>) {
+        if !self.team {
+            return;
+        }
+        let author = author.unwrap_or("q").to_string();
+        let _ = q_platform::git::commit_all(workspace_dir, &author, "Update queue");
+        self.push_due = Some(Instant::now() + TEAM_PUSH_DEBOUNCE);
+    }
+
+    /// Starts a background fetch or push when one is due.
+    fn drive_team_sync(&mut self, workspace_dir: &Path, tx: &Sender<RuntimeEvent>) {
+        if !self.team || self.sync_in_flight {
+            return;
+        }
+        let token = q_platform::github::resolve_token()
+            .ok()
+            .flatten()
+            .map(|(token, _)| token)
+            .unwrap_or_default();
+        if self.push_due.is_some_and(|due| due <= Instant::now()) {
+            self.push_due = None;
+            self.sync_in_flight = true;
+            let dir = workspace_dir.to_path_buf();
+            let tx = tx.clone();
+            std::thread::spawn(move || {
+                let error = q_platform::git::push(&dir, &token)
+                    .err()
+                    .map(|error| error.to_string());
+                let _ = tx.send(RuntimeEvent::SyncDone { error });
+            });
+            return;
+        }
+        if self.last_fetch.elapsed() >= TEAM_FETCH_INTERVAL {
+            self.last_fetch = Instant::now();
+            self.sync_in_flight = true;
+            let dir = workspace_dir.to_path_buf();
+            let tx = tx.clone();
+            let author = q_platform::github::cached_login()
+                .ok()
+                .flatten()
+                .unwrap_or_else(|| "q".to_string());
+            std::thread::spawn(move || {
+                let error = q_platform::git::fetch_and_merge(&dir, &token, &author)
+                    .err()
+                    .map(|error| error.to_string());
+                let _ = tx.send(RuntimeEvent::SyncDone { error });
+            });
         }
     }
 
@@ -285,9 +354,18 @@ fn verify_external_content(
     Ok(())
 }
 
-fn persist_mutation(app: &mut App, workspace_dir: &Path, mutation: &QueueMutation) -> Result<bool> {
+fn persist_mutation(
+    app: &mut App,
+    workspace_dir: &Path,
+    mutation: &QueueMutation,
+    sync: &mut QueueSync,
+) -> Result<bool> {
     let identity = app.identity.clone();
-    match commit_mutation(workspace_dir, mutation, identity.as_deref())? {
+    let outcome = commit_mutation(workspace_dir, mutation, identity.as_deref())?;
+    if matches!(outcome, MutationOutcome::Committed(_)) {
+        sync.note_team_mutation(workspace_dir, identity.as_deref());
+    }
+    match outcome {
         MutationOutcome::Committed(workspace) => {
             let close_editor = match mutation {
                 QueueMutation::EditInline { id, .. } => {
@@ -388,6 +466,10 @@ enum RuntimeEvent {
     Converted {
         result: std::result::Result<String, String>,
     },
+    /// A background fetch/merge or push finished.
+    SyncDone {
+        error: Option<String>,
+    },
 }
 
 fn apply_runtime_event(app: &mut App, event: RuntimeEvent, workspace_dir: &Path) {
@@ -429,6 +511,7 @@ fn apply_runtime_event(app: &mut App, event: RuntimeEvent, workspace_dir: &Path)
                 }
             }
         }
+        RuntimeEvent::SyncDone { .. } => {}
         RuntimeEvent::Converted { result } => match result {
             Ok(full_name) => {
                 if let Ok(entries) = workspace_entries(workspace_dir) {
@@ -542,7 +625,7 @@ fn handle_event(
             Err(error) => app.status = format!("clipboard failed: {error}"),
         },
         Some(Effect::CopyAndPersist { text, mutation }) => match clipboard.set_text(&text) {
-            Ok(()) => match persist_mutation(app, workspace_dir, &mutation) {
+            Ok(()) => match persist_mutation(app, workspace_dir, &mutation, sync) {
                 Ok(true) => app.status = format!("copied {} chars", text.chars().count()),
                 Ok(false) => {}
                 Err(error) => {
@@ -551,18 +634,20 @@ fn handle_event(
             },
             Err(error) => app.status = format!("clipboard failed: {error}"),
         },
-        Some(Effect::Persist(mutation)) => match persist_mutation(app, workspace_dir, &mutation) {
-            Ok(true) => app.status.clear(),
-            Ok(false) => {}
-            Err(error) if matches!(mutation, QueueMutation::EditInline { .. }) => {
-                let message = format!("save failed: {error}");
-                if let Some(editor) = app.editor.as_mut() {
-                    editor.error = message.clone();
+        Some(Effect::Persist(mutation)) => {
+            match persist_mutation(app, workspace_dir, &mutation, sync) {
+                Ok(true) => app.status.clear(),
+                Ok(false) => {}
+                Err(error) if matches!(mutation, QueueMutation::EditInline { .. }) => {
+                    let message = format!("save failed: {error}");
+                    if let Some(editor) = app.editor.as_mut() {
+                        editor.error = message.clone();
+                    }
+                    app.status = message;
                 }
-                app.status = message;
+                Err(error) => return Err(error),
             }
-            Err(error) => return Err(error),
-        },
+        }
         Some(Effect::SaveExternal) => {
             save_external_editor(app, workspace_dir);
         }
@@ -778,11 +863,18 @@ fn workspaces_root(workspace_dir: &Path) -> PathBuf {
 fn workspace_entries(workspace_dir: &Path) -> Result<Vec<WorkspaceEntry>> {
     Ok(q_core::storage::list_dirs(&workspaces_root(workspace_dir))?
         .into_iter()
-        .map(|(dir, meta)| WorkspaceEntry {
-            current: dir == workspace_dir,
-            team: q_platform::git::is_repo(&dir),
-            dir,
-            name: meta.name,
+        .map(|(dir, meta)| {
+            let team = q_platform::git::is_repo(&dir);
+            WorkspaceEntry {
+                current: dir == workspace_dir,
+                team,
+                sync: team.then(|| {
+                    q_platform::git::sync_state(&dir)
+                        .unwrap_or(q_platform::git::LocalSyncState::Pending)
+                }),
+                dir,
+                name: meta.name,
+            }
         })
         .collect())
 }

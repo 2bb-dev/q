@@ -914,6 +914,7 @@ fn successful_inline_editor_save_returns_to_queue() {
             expected_pinned: false,
             text: "after".to_string(),
         },
+        &mut QueueSync::new(&queue_path),
     )
     .unwrap());
 

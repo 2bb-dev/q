@@ -700,6 +700,7 @@ fn open_workspaces_with(app: &mut App, names: &[&str]) {
             dir: std::path::PathBuf::from(format!("/tmp/ws/{name}")),
             name: name.to_string(),
             current: index == 0,
+            sync: None,
             team: false,
         })
         .collect();
@@ -966,6 +967,7 @@ fn team_workspaces_offer_no_convert_action() {
         name: "crew".to_string(),
         current: true,
         team: true,
+        sync: None,
     }];
     app.open_workspaces(entries);
 

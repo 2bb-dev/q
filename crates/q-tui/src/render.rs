@@ -812,11 +812,18 @@ fn render_menu(frame: &mut Frame, app: &App, cursor_on: bool) {
             lines.push(Line::styled(hint, dim()));
             frame.render_widget(Paragraph::new(lines), inner);
         }
-        MenuState::Workspaces(overlay) => render_workspaces_overlay(frame, overlay, cursor_on),
+        MenuState::Workspaces(overlay) => {
+            render_workspaces_overlay(frame, overlay, cursor_on, app.sync_error.as_deref())
+        }
     }
 }
 
-fn render_workspaces_overlay(frame: &mut Frame, overlay: &WorkspacesOverlay, cursor_on: bool) {
+fn render_workspaces_overlay(
+    frame: &mut Frame,
+    overlay: &WorkspacesOverlay,
+    cursor_on: bool,
+    sync_error: Option<&str>,
+) {
     let area = frame.area();
     let width = area.width.saturating_sub(4).clamp(12, 52);
     let extra = 4
@@ -835,11 +842,22 @@ fn render_workspaces_overlay(frame: &mut Frame, overlay: &WorkspacesOverlay, cur
     let mut lines = Vec::new();
     for (index, entry) in overlay.entries.iter().enumerate() {
         let marker = if entry.current { "* " } else { "  " };
-        let style = if index == overlay.selected {
-            Style::default().add_modifier(Modifier::REVERSED)
+        // Git-style sync colors: green synced, yellow pending, red error.
+        let color = if entry.current && sync_error.is_some() {
+            Some(Color::Red)
         } else {
-            Style::default()
+            entry.sync.map(|state| match state {
+                q_platform::git::LocalSyncState::Synced => Color::Green,
+                q_platform::git::LocalSyncState::Pending => Color::Yellow,
+            })
         };
+        let mut style = match color {
+            Some(color) => Style::default().fg(color),
+            None => Style::default(),
+        };
+        if index == overlay.selected {
+            style = style.add_modifier(Modifier::REVERSED);
+        }
         lines.push(Line::styled(format!("{marker}{}", entry.name), style));
     }
     if let WorkspacesMode::Create { value, team } = &overlay.mode {

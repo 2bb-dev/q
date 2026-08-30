@@ -164,6 +164,8 @@ pub struct WorkspaceEntry {
     pub current: bool,
     /// Whether this is a team workspace (a git repository).
     pub team: bool,
+    /// Local sync state for team workspaces; `None` for personal ones.
+    pub sync: Option<q_platform::git::LocalSyncState>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -567,6 +569,8 @@ pub struct App {
     pub github: GithubAuthState,
     /// GitHub login used for attribution on new prompts, tabs, and edits.
     pub identity: Option<String>,
+    /// Last team-sync failure for the current workspace, if any.
+    pub sync_error: Option<String>,
     pub editor: Option<FullScreenEditor>,
     pub status: String,
     pub(crate) tab_hits: Vec<TabHit>,
@@ -603,6 +607,7 @@ impl App {
             menu: None,
             github: GithubAuthState::Unknown,
             identity: None,
+            sync_error: None,
             editor: None,
             status: String::new(),
             tab_hits: Vec::new(),
