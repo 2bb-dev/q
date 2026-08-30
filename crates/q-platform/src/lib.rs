@@ -1,10 +1,9 @@
-//! q-cli platform crate: app dirs, file locking, clipboard (text + image).
+//! q-cli platform crate: app dirs, file locking, clipboard.
 //!
 //! This crate is the only one allowed to depend on `arboard`, `fd-lock`,
-//! `directories`, and `image`. All OS-specific concerns live here.
+//! and `directories`. All OS-specific concerns live here.
 
 pub mod clipboard;
 pub mod external_document;
-pub mod images;
 pub mod lock;
 pub mod paths;

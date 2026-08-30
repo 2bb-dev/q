@@ -49,17 +49,6 @@ fn config_path_ends_in_config_json() {
 }
 
 #[test]
-fn images_dir_is_created_under_app_dir() {
-    let _guard = ENV_GUARD.lock().unwrap();
-    let tmp = TempDir::new().unwrap();
-    set_app_dir(tmp.path());
-    let dir = images_dir().unwrap();
-    assert_eq!(dir, tmp.path().join("images"));
-    assert!(dir.is_dir(), "images_dir should create the directory");
-    clear_app_dir();
-}
-
-#[test]
 fn app_dir_creates_missing_override_directory() {
     let _guard = ENV_GUARD.lock().unwrap();
     let tmp = TempDir::new().unwrap();

@@ -4,7 +4,7 @@
 
 use std::path::PathBuf;
 
-/// Returns the base directory for q-cli data (queue, config, images).
+/// Returns the base directory for q-cli data (queue, config).
 ///
 /// - If `QCLI_APP_DIR` is set, that path is used (created if missing).
 /// - macOS: `~/Library/Application Support/q-cli`
@@ -34,13 +34,6 @@ pub fn queue_path() -> std::io::Result<PathBuf> {
 /// Path to the persisted provider config JSON.
 pub fn config_path() -> std::io::Result<PathBuf> {
     Ok(app_dir()?.join("config.json"))
-}
-
-/// Directory for stored image attachments.
-pub fn images_dir() -> std::io::Result<PathBuf> {
-    let dir = app_dir()?.join("images");
-    std::fs::create_dir_all(&dir)?;
-    Ok(dir)
 }
 
 #[cfg(test)]
