@@ -28,7 +28,13 @@
 
 ## Install
 
-Run the installer on macOS, Linux, or Git Bash on Windows:
+With npm:
+
+```bash
+npm install -g q-cli
+```
+
+Or run the installer on macOS, Linux, or Git Bash on Windows:
 
 ```bash
 curl --proto '=https' --tlsv1.2 -LsSf https://raw.githubusercontent.com/2bb-dev/q/main/install.sh | sh

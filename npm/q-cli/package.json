@@ -1,0 +1,33 @@
+{
+  "name": "q-cli",
+  "version": "0.0.0",
+  "description": "A native terminal queue for prompts, tasks, and text snippets",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/2bb-dev/q.git"
+  },
+  "homepage": "https://github.com/2bb-dev/q#readme",
+  "keywords": [
+    "queue",
+    "prompts",
+    "tui",
+    "terminal",
+    "clipboard"
+  ],
+  "bin": {
+    "q": "bin/q.js"
+  },
+  "files": [
+    "bin/q.js"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "optionalDependencies": {
+    "q-cli-darwin-arm64": "0.0.0",
+    "q-cli-darwin-x64": "0.0.0",
+    "q-cli-linux-x64": "0.0.0",
+    "q-cli-win32-x64": "0.0.0"
+  }
+}
