@@ -1,7 +1,7 @@
 use crate::app::{
-    App, CloseTabDialog, DeletePromptDialog, EditorOrigin, Effect, Input, Pane, PreviewSource,
-    PromptPreview, QueueMutation, SearchDialog, TabContextMenu, TabDialog, TabDialogMode,
-    TabMenuAction,
+    App, CloseTabDialog, DeletePromptDialog, EditorOrigin, Effect, InfoAction, InfoMode, Input,
+    MenuItem, MenuState, Pane, PreviewSource, PromptPreview, QueueMutation, SearchDialog,
+    TabContextMenu, TabDialog, TabDialogMode, TabMenuAction, WorkspaceInfo, WorkspacesMode,
 };
 use chrono::Utc;
 use q_core::{Prompt, PromptSource, TabId};
@@ -25,6 +25,9 @@ pub fn reduce(app: &mut App, input: Input) -> Option<Effect> {
         }
         return None;
     }
+    if app.menu.is_some() {
+        return reduce_menu(app, input);
+    }
     if app.delete_prompt_dialog.is_some() {
         return reduce_delete_prompt_dialog(app, input);
     }
@@ -47,6 +50,12 @@ pub fn reduce(app: &mut App, input: Input) -> Option<Effect> {
     match input {
         Input::OpenSearch => {
             app.search = Some(SearchDialog::default());
+            return None;
+        }
+        Input::OpenMenu => {
+            app.menu = Some(MenuState::Root {
+                selected: MenuItem::Workspaces,
+            });
             return None;
         }
         Input::OpenCreateTab => {
@@ -90,6 +99,132 @@ pub fn reduce(app: &mut App, input: Input) -> Option<Effect> {
         Pane::Queue => reduce_queue(app, input),
         Pane::Composer => reduce_composer(app, input),
     }
+}
+
+fn reduce_menu(app: &mut App, input: Input) -> Option<Effect> {
+    let menu = app.menu.as_mut()?;
+    match menu {
+        MenuState::Root { selected } => match input {
+            Input::Esc => app.menu = None,
+            Input::Up | Input::Down | Input::Tab => {
+                *selected = match selected {
+                    MenuItem::Workspaces => MenuItem::Settings,
+                    MenuItem::Settings => MenuItem::Workspaces,
+                };
+            }
+            Input::Enter => match selected {
+                MenuItem::Workspaces => return Some(Effect::OpenWorkspacesOverlay),
+                MenuItem::Settings => *menu = MenuState::Settings,
+            },
+            _ => {}
+        },
+        MenuState::Settings => {
+            if matches!(input, Input::Esc) {
+                *menu = MenuState::Root {
+                    selected: MenuItem::Settings,
+                };
+            }
+        }
+        MenuState::Workspaces(overlay) => {
+            overlay.error.clear();
+            match &mut overlay.mode {
+                WorkspacesMode::List => match input {
+                    Input::Esc => {
+                        *menu = MenuState::Root {
+                            selected: MenuItem::Workspaces,
+                        };
+                    }
+                    Input::Up | Input::Char('k') => {
+                        overlay.selected = overlay.selected.saturating_sub(1);
+                    }
+                    Input::Down | Input::Char('j') => {
+                        overlay.selected =
+                            (overlay.selected + 1).min(overlay.entries.len().saturating_sub(1));
+                    }
+                    Input::Enter => {
+                        let dir = overlay.selected_entry()?.dir.clone();
+                        return Some(Effect::SwitchWorkspace(dir));
+                    }
+                    Input::Char('n') => {
+                        overlay.mode = WorkspacesMode::Create {
+                            value: String::new(),
+                        };
+                    }
+                    Input::Char('i') if overlay.selected_entry().is_some() => {
+                        overlay.mode = WorkspacesMode::Info(WorkspaceInfo {
+                            action: InfoAction::Rename,
+                            mode: InfoMode::View,
+                        });
+                    }
+                    _ => {}
+                },
+                WorkspacesMode::Create { value } => match input {
+                    Input::Esc => overlay.mode = WorkspacesMode::List,
+                    Input::Char(c) => value.push(c),
+                    Input::Backspace => {
+                        value.pop();
+                    }
+                    Input::Enter => {
+                        return Some(Effect::CreateWorkspace(value.clone()));
+                    }
+                    _ => {}
+                },
+                WorkspacesMode::Info(info) => match &mut info.mode {
+                    InfoMode::View => match input {
+                        Input::Esc => overlay.mode = WorkspacesMode::List,
+                        Input::Up | Input::Down | Input::Tab | Input::Char('j' | 'k') => {
+                            info.action = match info.action {
+                                InfoAction::Rename => InfoAction::Delete,
+                                InfoAction::Delete => InfoAction::Rename,
+                            };
+                        }
+                        Input::Enter => match info.action {
+                            InfoAction::Rename => {
+                                let value = overlay
+                                    .entries
+                                    .get(overlay.selected)
+                                    .map(|entry| entry.name.clone())
+                                    .unwrap_or_default();
+                                if let WorkspacesMode::Info(info) = &mut overlay.mode {
+                                    info.mode = InfoMode::Rename { value };
+                                }
+                            }
+                            InfoAction::Delete => {
+                                if overlay.entries.len() == 1 {
+                                    overlay.error = "cannot delete the last workspace".to_string();
+                                } else if let WorkspacesMode::Info(info) = &mut overlay.mode {
+                                    info.mode = InfoMode::ConfirmDelete;
+                                }
+                            }
+                        },
+                        _ => {}
+                    },
+                    InfoMode::Rename { value } => match input {
+                        Input::Esc => info.mode = InfoMode::View,
+                        Input::Char(c) => value.push(c),
+                        Input::Backspace => {
+                            value.pop();
+                        }
+                        Input::Enter => {
+                            let name = value.clone();
+                            let dir = overlay.entries.get(overlay.selected)?.dir.clone();
+                            return Some(Effect::RenameWorkspace { dir, name });
+                        }
+                        _ => {}
+                    },
+                    InfoMode::ConfirmDelete => match input {
+                        Input::Esc => info.mode = InfoMode::View,
+                        Input::Enter => {
+                            let dir = overlay.entries.get(overlay.selected)?.dir.clone();
+                            return Some(Effect::DeleteWorkspace(dir));
+                        }
+                        _ => {}
+                    },
+                },
+            }
+        }
+    }
+    None
 }
 
 fn reduce_editor(app: &mut App, input: Input) -> Option<Effect> {
