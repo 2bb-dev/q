@@ -1,7 +1,7 @@
 use anyhow::Result;
 
-pub fn run() -> Result<()> {
-    let dir = super::active_workspace_dir()?;
+pub fn run(workspace: Option<&str>) -> Result<()> {
+    let dir = super::resolve_workspace_dir(workspace)?;
     q_tui::run(&dir)?;
     Ok(())
 }

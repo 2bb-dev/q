@@ -25,21 +25,28 @@ impl<'a> HistoryOutput<'a> {
     }
 }
 
-pub fn run(json: bool, search: Option<String>, clear: bool, forget: Option<String>) -> Result<()> {
+pub fn run(
+    json: bool,
+    search: Option<String>,
+    clear: bool,
+    forget: Option<String>,
+    workspace: Option<&str>,
+) -> Result<()> {
     if clear {
-        let forgotten = with_workspace_mut(|workspace| Ok(workspace.clear_history()))?;
+        let forgotten = with_workspace_mut(workspace, |workspace| Ok(workspace.clear_history()))?;
         println!("forgot {}", prompt_count(forgotten));
         return Ok(());
     }
     if let Some(term) = forget {
         let query = Query::new(&term);
-        let forgotten =
-            with_workspace_mut(|workspace| Ok(source::forget_matching(workspace, &query)))?;
+        let forgotten = with_workspace_mut(workspace, |workspace| {
+            Ok(source::forget_matching(workspace, &query))
+        })?;
         println!("forgot {}", prompt_count(forgotten));
         return Ok(());
     }
 
-    with_workspace(|workspace| {
+    with_workspace(workspace, |workspace| {
         let query = Query::new(&search.unwrap_or_default());
         let entries: Vec<_> = workspace
             .history()

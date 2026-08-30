@@ -29,8 +29,8 @@ impl<'a> PromptOutput<'a> {
     }
 }
 
-pub fn run(json: bool, tab: Option<String>) -> Result<()> {
-    with_workspace(|workspace| {
+pub fn run(json: bool, tab: Option<String>, workspace: Option<&str>) -> Result<()> {
+    with_workspace(workspace, |workspace| {
         let tab_id = workspace.resolve_context_tab(tab.as_deref())?;
         let queue = workspace
             .tab(tab_id)
