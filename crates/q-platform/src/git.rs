@@ -116,6 +116,13 @@ pub fn clone_repo(url: &str, dir: &Path, token: &str) -> Result<(), GitError> {
     Ok(())
 }
 
+/// URL of the `origin` remote, when the workspace has one.
+pub fn origin_url(dir: &Path) -> Option<String> {
+    let repo = Repository::open(dir).ok()?;
+    let remote = repo.find_remote("origin").ok()?;
+    remote.url().map(str::to_string)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SyncOutcome {
     UpToDate,

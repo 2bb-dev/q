@@ -1,8 +1,8 @@
 use crate::app::{
-    App, CloseTabDialog, DeletePromptDialog, EditorOrigin, Effect, GithubAuthState, InfoAction,
-    InfoMode, Input, MenuItem, MenuState, Pane, PreviewSource, PromptPreview, QueueMutation,
-    SearchDialog, TabContextMenu, TabDialog, TabDialogMode, TabMenuAction, WorkspaceInfo,
-    WorkspacesMode,
+    App, CloseTabDialog, ConnectState, DeletePromptDialog, EditorOrigin, Effect, GithubAuthState,
+    InfoAction, InfoMode, Input, MenuItem, MenuState, Pane, PreviewSource, PromptPreview,
+    QueueMutation, SearchDialog, TabContextMenu, TabDialog, TabDialogMode, TabMenuAction,
+    WorkspaceInfo, WorkspacesMode,
 };
 use chrono::Utc;
 use q_core::{Prompt, PromptSource, TabId};
@@ -179,7 +179,47 @@ fn reduce_menu(app: &mut App, input: Input) -> Option<Effect> {
                             mode: InfoMode::View,
                         });
                     }
+                    Input::Char('c') => {
+                        overlay.mode = WorkspacesMode::Connect(ConnectState::Loading);
+                        return Some(Effect::OpenConnect);
+                    }
                     _ => {}
+                },
+                WorkspacesMode::Connect(state) => match state {
+                    ConnectState::Loading | ConnectState::Working => {
+                        if matches!(input, Input::Esc) {
+                            overlay.mode = WorkspacesMode::List;
+                        }
+                    }
+                    ConnectState::Ready {
+                        invitations,
+                        repos,
+                        selected,
+                    } => match input {
+                        Input::Esc => overlay.mode = WorkspacesMode::List,
+                        Input::Up | Input::Char('k') => *selected = selected.saturating_sub(1),
+                        Input::Down | Input::Char('j') => {
+                            let last = (invitations.len() + repos.len()).saturating_sub(1);
+                            *selected = (*selected + 1).min(last);
+                        }
+                        Input::Enter => {
+                            if let Some(invitation) = invitations.get(*selected) {
+                                let id = invitation.id;
+                                *state = ConnectState::Working;
+                                return Some(Effect::AcceptInvitation(id));
+                            }
+                            let index = *selected - invitations.len();
+                            if let Some(repo) = repos.get(index) {
+                                let effect = Effect::ConnectRepo {
+                                    full_name: repo.full_name.clone(),
+                                    clone_url: repo.clone_url.clone(),
+                                };
+                                *state = ConnectState::Working;
+                                return Some(effect);
+                            }
+                        }
+                        _ => {}
+                    },
                 },
                 WorkspacesMode::Create { value, team } => match input {
                     Input::Esc => overlay.mode = WorkspacesMode::List,

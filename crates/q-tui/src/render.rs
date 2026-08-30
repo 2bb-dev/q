@@ -1,6 +1,7 @@
 use crate::app::{
-    App, EditorOrigin, GithubAuthState, InfoAction, InfoMode, MenuItem, MenuState, Pane, PromptHit,
-    SearchHit, TabHit, TabHitTarget, TabMenuAction, TabMenuHit, WorkspacesMode, WorkspacesOverlay,
+    App, ConnectState, EditorOrigin, GithubAuthState, InfoAction, InfoMode, MenuItem, MenuState,
+    Pane, PromptHit, SearchHit, TabHit, TabHitTarget, TabMenuAction, TabMenuHit, WorkspacesMode,
+    WorkspacesOverlay,
 };
 use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
@@ -885,9 +886,10 @@ fn render_workspaces_overlay(
     }
     lines.push(Line::raw(""));
     let hint = match overlay.mode {
-        WorkspacesMode::List => "Enter switch \u{b7} n new \u{b7} i info \u{b7} Esc back",
         WorkspacesMode::Create { .. } => "Enter create \u{b7} Esc cancel",
-        WorkspacesMode::Info(_) => "Enter switch \u{b7} n new \u{b7} i info \u{b7} Esc back",
+        _ => {
+            "Enter switch \u{b7} n new \u{b7} t team \u{b7} c connect \u{b7} i info \u{b7} Esc back"
+        }
     };
     lines.push(Line::styled(hint, dim()));
     frame.render_widget(Paragraph::new(lines), inner);
@@ -895,6 +897,69 @@ fn render_workspaces_overlay(
     if let WorkspacesMode::Info(info) = &overlay.mode {
         render_workspace_info(frame, overlay, info, cursor_on);
     }
+    if let WorkspacesMode::Connect(state) = &overlay.mode {
+        render_connect(frame, state);
+    }
+}
+
+fn render_connect(frame: &mut Frame, state: &ConnectState) {
+    let area = frame.area();
+    let width = area.width.saturating_sub(6).clamp(12, 54);
+    let mut lines = Vec::new();
+    match state {
+        ConnectState::Loading => {
+            lines.push(Line::styled("Loading from GitHub...", dim()));
+            lines.push(Line::styled("Esc cancel", dim()));
+        }
+        ConnectState::Working => {
+            lines.push(Line::styled("Working...", dim()));
+        }
+        ConnectState::Ready {
+            invitations,
+            repos,
+            selected,
+        } => {
+            if invitations.is_empty() && repos.is_empty() {
+                lines.push(Line::styled(
+                    "No pending invites or q-workspace repos.",
+                    dim(),
+                ));
+            }
+            for (index, invitation) in invitations.iter().enumerate() {
+                let inviter = invitation
+                    .inviter
+                    .as_deref()
+                    .map(|login| format!(" from {login}"))
+                    .unwrap_or_default();
+                let label = format!(" invite: {}{inviter}", invitation.full_name);
+                let style = if index == *selected {
+                    Style::default().add_modifier(Modifier::REVERSED)
+                } else {
+                    Style::default().fg(ACCENT)
+                };
+                lines.push(Line::styled(label, style));
+            }
+            for (index, repo) in repos.iter().enumerate() {
+                let style = if invitations.len() + index == *selected {
+                    Style::default().add_modifier(Modifier::REVERSED)
+                } else {
+                    Style::default()
+                };
+                lines.push(Line::styled(format!(" {}", repo.full_name), style));
+            }
+            lines.push(Line::styled("Enter accept/connect \u{b7} Esc back", dim()));
+        }
+    }
+    let height = ((lines.len() as u16) + 2).min(area.height);
+    let dialog_area = centered_rect(width, height, area);
+    let block = Block::default()
+        .title(" Connect team queue ")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(ACCENT));
+    let inner = block.inner(dialog_area);
+    frame.render_widget(Clear, dialog_area);
+    frame.render_widget(block, dialog_area);
+    frame.render_widget(Paragraph::new(lines), inner);
 }
 
 fn render_workspace_info(
