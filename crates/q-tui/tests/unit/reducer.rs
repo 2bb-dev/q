@@ -846,6 +846,7 @@ fn info_delete_refuses_the_last_workspace() {
         WorkspacesMode::Info(WorkspaceInfo {
             action: InfoAction::Delete,
             mode: InfoMode::View,
+            details: None,
         })
     );
 }
@@ -972,14 +973,18 @@ fn team_workspaces_offer_no_convert_action() {
     app.open_workspaces(entries);
 
     reduce(&mut app, Input::Char('i'));
-    reduce(&mut app, Input::Down); // should land on Delete directly
+    // Team actions: Rename, Invite, Leave, Delete repo - no convert.
+    reduce(&mut app, Input::Down);
+    reduce(&mut app, Input::Down);
+    reduce(&mut app, Input::Down);
+    reduce(&mut app, Input::Down); // clamps at the last action
     let Some(MenuState::Workspaces(overlay)) = &app.menu else {
         panic!("workspaces overlay expected");
     };
     let WorkspacesMode::Info(info) = &overlay.mode else {
         panic!("info dialog expected");
     };
-    assert_eq!(info.action, InfoAction::Delete);
+    assert_eq!(info.action, InfoAction::DeleteRepo);
 }
 
 // --- Connect team queue ---
@@ -1062,4 +1067,84 @@ fn esc_returns_from_connect_to_the_list() {
         panic!("workspaces overlay expected");
     };
     assert_eq!(overlay.mode, WorkspacesMode::List);
+}
+
+// --- Team management in the info dialog ---
+
+fn open_team_info(app: &mut App) -> Option<Effect> {
+    let entries = vec![
+        WorkspaceEntry {
+            dir: std::path::PathBuf::from("/tmp/ws/crew"),
+            name: "crew".to_string(),
+            current: true,
+            team: true,
+            sync: None,
+        },
+        WorkspaceEntry {
+            dir: std::path::PathBuf::from("/tmp/ws/other"),
+            name: "other".to_string(),
+            current: false,
+            team: false,
+            sync: None,
+        },
+    ];
+    app.open_workspaces(entries);
+    reduce(app, Input::Char('i'))
+}
+
+#[test]
+fn opening_team_info_fetches_team_details() {
+    let mut app = app_with(1);
+    assert_eq!(
+        open_team_info(&mut app),
+        Some(Effect::FetchTeamInfo(std::path::PathBuf::from(
+            "/tmp/ws/crew"
+        )))
+    );
+}
+
+#[test]
+fn invite_action_collects_a_username() {
+    let mut app = app_with(1);
+    open_team_info(&mut app);
+    reduce(&mut app, Input::Down); // Invite
+    reduce(&mut app, Input::Enter);
+    for c in "octocat".chars() {
+        reduce(&mut app, Input::Char(c));
+    }
+    assert_eq!(
+        reduce(&mut app, Input::Enter),
+        Some(Effect::InviteCollaborator {
+            dir: std::path::PathBuf::from("/tmp/ws/crew"),
+            username: "octocat".to_string(),
+        })
+    );
+}
+
+#[test]
+fn leave_removes_locally_and_delete_repo_is_a_separate_confirmation() {
+    let mut app = app_with(1);
+    open_team_info(&mut app);
+
+    reduce(&mut app, Input::Down); // Invite
+    reduce(&mut app, Input::Down); // Leave
+    reduce(&mut app, Input::Enter); // confirm leave
+    assert_eq!(
+        reduce(&mut app, Input::Enter),
+        Some(Effect::DeleteWorkspace(std::path::PathBuf::from(
+            "/tmp/ws/crew"
+        )))
+    );
+
+    // Reopen and take the delete-repo path.
+    let mut app = app_with(1);
+    open_team_info(&mut app);
+    reduce(&mut app, Input::Down);
+    reduce(&mut app, Input::Down);
+    reduce(&mut app, Input::Down); // Delete repo
+    reduce(&mut app, Input::Enter); // confirmation dialog
+    assert_eq!(
+        reduce(&mut app, Input::Enter),
+        Some(Effect::DeleteRepo(std::path::PathBuf::from("/tmp/ws/crew")))
+    );
 }

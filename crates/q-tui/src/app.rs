@@ -132,6 +132,12 @@ pub enum Effect {
         full_name: String,
         clone_url: String,
     },
+    FetchTeamInfo(PathBuf),
+    InviteCollaborator {
+        dir: PathBuf,
+        username: String,
+    },
+    DeleteRepo(PathBuf),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -228,13 +234,21 @@ pub enum InfoAction {
     Rename,
     ConvertToTeam,
     Delete,
+    Invite,
+    Leave,
+    DeleteRepo,
 }
 
 impl InfoAction {
     /// Actions available for an entry, in display order.
     pub fn available(team: bool) -> &'static [InfoAction] {
         if team {
-            &[InfoAction::Rename, InfoAction::Delete]
+            &[
+                InfoAction::Rename,
+                InfoAction::Invite,
+                InfoAction::Leave,
+                InfoAction::DeleteRepo,
+            ]
         } else {
             &[
                 InfoAction::Rename,
@@ -245,6 +259,14 @@ impl InfoAction {
     }
 }
 
+/// Team details fetched from GitHub for the info dialog.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TeamDetails {
+    pub repo: String,
+    pub members: Vec<String>,
+    pub pending: Vec<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InfoMode {
     View,
@@ -252,6 +274,14 @@ pub enum InfoMode {
         value: String,
     },
     ConfirmDelete,
+    /// Entering a GitHub username to invite as a collaborator.
+    Invite {
+        value: String,
+    },
+    /// Confirming local removal of a team workspace.
+    ConfirmLeave,
+    /// Confirming deletion of the shared repository (owner only).
+    ConfirmDeleteRepo,
     /// Fetching the possible repo owners (user + orgs) from GitHub.
     LoadingOwners,
     /// Choosing who owns the auto-created private repo. `None` = the user.
@@ -267,6 +297,9 @@ pub enum InfoMode {
 pub struct WorkspaceInfo {
     pub action: InfoAction,
     pub mode: InfoMode,
+    /// Members and pending invites, fetched in the background for team
+    /// workspaces.
+    pub details: Option<TeamDetails>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -619,6 +652,8 @@ pub struct App {
     pub identity: Option<String>,
     /// Last team-sync failure for the current workspace, if any.
     pub sync_error: Option<String>,
+    /// Whether the current workspace is a team workspace.
+    pub is_team: bool,
     pub editor: Option<FullScreenEditor>,
     pub status: String,
     pub(crate) tab_hits: Vec<TabHit>,
@@ -656,6 +691,7 @@ impl App {
             github: GithubAuthState::Unknown,
             identity: None,
             sync_error: None,
+            is_team: false,
             editor: None,
             status: String::new(),
             tab_hits: Vec::new(),
@@ -806,6 +842,15 @@ impl App {
         match &self.preview.as_ref()?.source {
             PreviewSource::Prompt(id) => self.workspace.get_prompt(*id).map(Prompt::source),
             PreviewSource::History(source) => Some(source),
+        }
+    }
+
+    /// The queued prompt behind the preview, when it previews a prompt
+    /// (history previews have no prompt).
+    pub(crate) fn preview_prompt(&self) -> Option<&Prompt> {
+        match &self.preview.as_ref()?.source {
+            PreviewSource::Prompt(id) => self.workspace.get_prompt(*id),
+            PreviewSource::History(_) => None,
         }
     }
 

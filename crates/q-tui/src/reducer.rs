@@ -174,10 +174,16 @@ fn reduce_menu(app: &mut App, input: Input) -> Option<Effect> {
                         };
                     }
                     Input::Char('i') if overlay.selected_entry().is_some() => {
+                        let entry = overlay.selected_entry()?;
+                        let team_dir = entry.team.then(|| entry.dir.clone());
                         overlay.mode = WorkspacesMode::Info(WorkspaceInfo {
                             action: InfoAction::Rename,
                             mode: InfoMode::View,
+                            details: None,
                         });
+                        if let Some(dir) = team_dir {
+                            return Some(Effect::FetchTeamInfo(dir));
+                        }
                     }
                     Input::Char('c') => {
                         overlay.mode = WorkspacesMode::Connect(ConnectState::Loading);
@@ -274,7 +280,55 @@ fn reduce_menu(app: &mut App, input: Input) -> Option<Effect> {
                                     info.mode = InfoMode::ConfirmDelete;
                                 }
                             }
+                            InfoAction::Invite => {
+                                info.mode = InfoMode::Invite {
+                                    value: String::new(),
+                                };
+                            }
+                            InfoAction::Leave => {
+                                if overlay.entries.len() == 1 {
+                                    overlay.error = "cannot delete the last workspace".to_string();
+                                } else if let WorkspacesMode::Info(info) = &mut overlay.mode {
+                                    info.mode = InfoMode::ConfirmLeave;
+                                }
+                            }
+                            InfoAction::DeleteRepo => {
+                                info.mode = InfoMode::ConfirmDeleteRepo;
+                            }
                         },
+                        _ => {}
+                    },
+                    InfoMode::Invite { value } => match input {
+                        Input::Esc => info.mode = InfoMode::View,
+                        Input::Char(c) => value.push(c),
+                        Input::Backspace => {
+                            value.pop();
+                        }
+                        Input::Enter => {
+                            let username = value.trim().to_string();
+                            if username.is_empty() {
+                                return None;
+                            }
+                            info.mode = InfoMode::View;
+                            let dir = overlay.entries.get(overlay.selected)?.dir.clone();
+                            return Some(Effect::InviteCollaborator { dir, username });
+                        }
+                        _ => {}
+                    },
+                    InfoMode::ConfirmLeave => match input {
+                        Input::Esc => info.mode = InfoMode::View,
+                        Input::Enter => {
+                            let dir = overlay.entries.get(overlay.selected)?.dir.clone();
+                            return Some(Effect::DeleteWorkspace(dir));
+                        }
+                        _ => {}
+                    },
+                    InfoMode::ConfirmDeleteRepo => match input {
+                        Input::Esc => info.mode = InfoMode::View,
+                        Input::Enter => {
+                            let dir = overlay.entries.get(overlay.selected)?.dir.clone();
+                            return Some(Effect::DeleteRepo(dir));
+                        }
                         _ => {}
                     },
                     InfoMode::LoadingOwners | InfoMode::Converting => {

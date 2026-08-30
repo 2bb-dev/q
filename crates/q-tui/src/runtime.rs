@@ -1,6 +1,6 @@
 use crate::app::{
     App, ConnectState, EditorOrigin, Effect, GithubAuthState, InfoMode, MenuState,
-    PendingInvitation, QueueMutation, RemoteRepo, WorkspaceEntry, WorkspacesMode,
+    PendingInvitation, QueueMutation, RemoteRepo, TeamDetails, WorkspaceEntry, WorkspacesMode,
 };
 use crate::reducer::reduce;
 use crate::render::draw;
@@ -39,6 +39,7 @@ pub fn run(workspace_dir: &Path) -> Result<()> {
     let queue = q_core::storage::load_dir(workspace_dir)?;
     let mut app = App::new(queue);
     app.identity = q_platform::github::cached_login().ok().flatten();
+    app.is_team = q_platform::git::is_repo(workspace_dir);
     let mut clipboard = SystemClipboard::new()?;
 
     let mut terminal = TerminalSession::new()?;
@@ -67,11 +68,32 @@ fn event_loop(
         sync.refresh_if_due(app, &workspace_dir);
         sync.drive_team_sync(&workspace_dir, &github_tx);
         while let Ok(event) = github_rx.try_recv() {
-            if let RuntimeEvent::SyncDone { error } = &event {
-                sync.sync_in_flight = false;
-                app.sync_error = error.clone();
+            match event {
+                RuntimeEvent::SyncDone { error } => {
+                    sync.sync_in_flight = false;
+                    app.sync_error = error;
+                }
+                RuntimeEvent::RepoDeleted { dir, result } => match result {
+                    Ok(()) => {
+                        if let Err(error) =
+                            delete_workspace_locally(app, &mut workspace_dir, &mut sync, &dir)
+                        {
+                            app.status = format!("local cleanup failed: {error}");
+                        } else {
+                            app.status = "deleted team workspace and repo".to_string();
+                        }
+                    }
+                    Err(error) => {
+                        if let Some(MenuState::Workspaces(overlay)) = app.menu.as_mut() {
+                            if let WorkspacesMode::Info(info) = &mut overlay.mode {
+                                info.mode = InfoMode::View;
+                            }
+                            overlay.error = error;
+                        }
+                    }
+                },
+                event => apply_runtime_event(app, event, &workspace_dir),
             }
-            apply_runtime_event(app, event, &workspace_dir);
         }
 
         let cursor_on = cursor_is_on(start.elapsed());
@@ -476,6 +498,15 @@ enum RuntimeEvent {
     InvitationAccepted(std::result::Result<(), String>),
     /// A repo clone finished.
     RepoConnected(std::result::Result<String, String>),
+    /// Team details (members, pending invites) arrived for the info dialog.
+    TeamInfo(std::result::Result<TeamDetails, String>),
+    /// A collaborator invitation finished.
+    Invited(std::result::Result<String, String>),
+    /// The shared repository was deleted; the local dir must go too.
+    RepoDeleted {
+        dir: PathBuf,
+        result: std::result::Result<(), String>,
+    },
 }
 
 fn apply_runtime_event(app: &mut App, event: RuntimeEvent, workspace_dir: &Path) {
@@ -517,7 +548,29 @@ fn apply_runtime_event(app: &mut App, event: RuntimeEvent, workspace_dir: &Path)
                 }
             }
         }
-        RuntimeEvent::SyncDone { .. } => {}
+        RuntimeEvent::SyncDone { .. } | RuntimeEvent::RepoDeleted { .. } => {}
+        RuntimeEvent::TeamInfo(result) => {
+            let Some(MenuState::Workspaces(overlay)) = app.menu.as_mut() else {
+                return;
+            };
+            let WorkspacesMode::Info(info) = &mut overlay.mode else {
+                return;
+            };
+            match result {
+                Ok(details) => info.details = Some(details),
+                Err(error) => overlay.error = error,
+            }
+        }
+        RuntimeEvent::Invited(result) => match result {
+            Ok(username) => {
+                app.status = format!("invited {username}");
+            }
+            Err(error) => {
+                if let Some(MenuState::Workspaces(overlay)) = app.menu.as_mut() {
+                    overlay.error = error;
+                }
+            }
+        },
         RuntimeEvent::ConnectList(result) => {
             let Some(MenuState::Workspaces(overlay)) = app.menu.as_mut() else {
                 return;
@@ -750,6 +803,42 @@ fn handle_event(
                 }
             });
         }
+        Some(Effect::FetchTeamInfo(dir)) => {
+            let tx = github_tx.clone();
+            std::thread::spawn(move || {
+                let _ = tx.send(RuntimeEvent::TeamInfo(fetch_team_details(&dir)));
+            });
+        }
+        Some(Effect::InviteCollaborator { dir, username }) => {
+            let tx = github_tx.clone();
+            std::thread::spawn(move || {
+                let result = (|| -> std::result::Result<String, String> {
+                    let token = require_token()?;
+                    let full_name = repo_full_name(&dir)?;
+                    q_platform::github::invite_collaborator(&token, &full_name, &username)
+                        .map_err(|error| error.to_string())?;
+                    Ok(username)
+                })();
+                let invited = result.is_ok();
+                let _ = tx.send(RuntimeEvent::Invited(result));
+                if invited {
+                    // Refresh members and pending invites.
+                    let _ = tx.send(RuntimeEvent::TeamInfo(fetch_team_details(&dir)));
+                }
+            });
+        }
+        Some(Effect::DeleteRepo(dir)) => {
+            let tx = github_tx.clone();
+            std::thread::spawn(move || {
+                let result = (|| -> std::result::Result<(), String> {
+                    let token = require_token()?;
+                    let full_name = repo_full_name(&dir)?;
+                    q_platform::github::delete_repo(&token, &full_name)
+                        .map_err(|error| error.to_string())
+                })();
+                let _ = tx.send(RuntimeEvent::RepoDeleted { dir, result });
+            });
+        }
         Some(Effect::ConnectRepo {
             full_name,
             clone_url,
@@ -823,6 +912,28 @@ fn spawn_github_status_refresh(tx: Sender<RuntimeEvent>) {
 
 fn spawn_github_connect(tx: Sender<RuntimeEvent>) {
     std::thread::spawn(move || run_device_flow(&tx));
+}
+
+fn repo_full_name(dir: &Path) -> std::result::Result<String, String> {
+    let url = q_platform::git::origin_url(dir)
+        .ok_or_else(|| "workspace has no origin remote".to_string())?;
+    q_platform::github::full_name_from_url(&url)
+        .ok_or_else(|| format!("not a GitHub remote: {url}"))
+}
+
+/// Fetches repo, members, and pending invites for the info dialog.
+fn fetch_team_details(dir: &Path) -> std::result::Result<TeamDetails, String> {
+    let token = require_token()?;
+    let repo = repo_full_name(dir)?;
+    let members =
+        q_platform::github::list_collaborators(&token, &repo).map_err(|error| error.to_string())?;
+    let pending = q_platform::github::list_pending_collaborators(&token, &repo)
+        .map_err(|error| error.to_string())?;
+    Ok(TeamDetails {
+        repo,
+        members,
+        pending,
+    })
 }
 
 fn require_token() -> std::result::Result<String, String> {
@@ -1060,8 +1171,35 @@ fn switch_workspace(
     *workspace_dir = dir.to_path_buf();
     app.replace_workspace(workspace);
     app.menu = None;
+    app.is_team = q_platform::git::is_repo(workspace_dir);
+    app.sync_error = None;
     app.status = format!("switched to workspace {name}");
     *sync = QueueSync::new(workspace_dir);
+    Ok(())
+}
+
+/// Removes a workspace directory, falling back to another workspace when
+/// the current one was removed, and refreshes the overlay.
+fn delete_workspace_locally(
+    app: &mut App,
+    workspace_dir: &mut PathBuf,
+    sync: &mut QueueSync,
+    dir: &Path,
+) -> Result<()> {
+    let entries = workspace_entries(workspace_dir)?;
+    if entries.len() <= 1 {
+        set_workspaces_error(app, "cannot delete the last workspace");
+        return Ok(());
+    }
+    let deleted_current = dir == workspace_dir;
+    std::fs::remove_dir_all(dir)?;
+    if deleted_current {
+        let remaining = workspace_entries(workspace_dir)?;
+        let fallback = remaining[0].dir.clone();
+        switch_workspace(app, workspace_dir, sync, &fallback)?;
+    }
+    let entries = workspace_entries(workspace_dir)?;
+    app.open_workspaces(entries);
     Ok(())
 }
 
@@ -1102,6 +1240,7 @@ fn handle_menu_effect(
                     overlay.mode = WorkspacesMode::Info(crate::app::WorkspaceInfo {
                         action: crate::app::InfoAction::ConvertToTeam,
                         mode: InfoMode::LoadingOwners,
+                        details: None,
                     });
                 }
                 spawn_fetch_owners(tx.clone());
@@ -1122,21 +1261,8 @@ fn handle_menu_effect(
             app.status = format!("renamed workspace to {name}");
         }
         Effect::DeleteWorkspace(dir) => {
-            let entries = workspace_entries(workspace_dir)?;
-            if entries.len() <= 1 {
-                set_workspaces_error(app, "cannot delete the last workspace");
-                return Ok(());
-            }
-            let deleted_current = dir == workspace_dir;
-            std::fs::remove_dir_all(dir)?;
-            if deleted_current {
-                let remaining = workspace_entries(workspace_dir)?;
-                let fallback = remaining[0].dir.clone();
-                switch_workspace(app, workspace_dir, sync, &fallback)?;
-            }
-            let entries = workspace_entries(workspace_dir)?;
-            app.open_workspaces(entries);
-            app.status = "deleted workspace".to_string();
+            delete_workspace_locally(app, workspace_dir, sync, dir)?;
+            app.status = "removed workspace".to_string();
         }
         _ => {}
     }
