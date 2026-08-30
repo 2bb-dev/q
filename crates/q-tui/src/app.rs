@@ -115,12 +115,37 @@ pub enum Effect {
         name: String,
     },
     DeleteWorkspace(PathBuf),
+    RefreshGithubStatus,
+    GithubConnect,
+    GithubDisconnect,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MenuItem {
     Workspaces,
     Settings,
+}
+
+/// GitHub connection state shown in Settings.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GithubAuthState {
+    /// Status has not been checked yet.
+    Unknown,
+    /// No usable token found.
+    NotConnected,
+    /// Checking the token or waiting for the device flow to start.
+    Checking,
+    /// Device flow is running; the user must enter the code.
+    Connecting {
+        user_code: String,
+        verification_uri: String,
+    },
+    Connected {
+        login: String,
+        /// True when the token is borrowed from the `gh` CLI.
+        gh_cli: bool,
+    },
+    Failed(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -502,6 +527,7 @@ pub struct App {
     pub preview: Option<PromptPreview>,
     pub search: Option<SearchDialog>,
     pub menu: Option<MenuState>,
+    pub github: GithubAuthState,
     pub editor: Option<FullScreenEditor>,
     pub status: String,
     pub(crate) tab_hits: Vec<TabHit>,
@@ -536,6 +562,7 @@ impl App {
             preview: None,
             search: None,
             menu: None,
+            github: GithubAuthState::Unknown,
             editor: None,
             status: String::new(),
             tab_hits: Vec::new(),

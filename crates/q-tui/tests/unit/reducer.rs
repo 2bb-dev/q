@@ -842,3 +842,59 @@ fn info_delete_refuses_the_last_workspace() {
         })
     );
 }
+
+// --- Settings / GitHub auth ---
+
+use crate::app::GithubAuthState;
+
+fn open_settings(app: &mut App) -> Option<Effect> {
+    reduce(app, Input::OpenMenu);
+    reduce(app, Input::Down);
+    reduce(app, Input::Enter)
+}
+
+#[test]
+fn opening_settings_requests_a_github_status_refresh() {
+    let mut app = app_with(1);
+    assert_eq!(open_settings(&mut app), Some(Effect::RefreshGithubStatus));
+    assert_eq!(app.menu, Some(MenuState::Settings));
+}
+
+#[test]
+fn settings_enter_connects_only_when_not_connected() {
+    let mut app = app_with(1);
+    open_settings(&mut app);
+
+    app.github = GithubAuthState::Checking;
+    assert_eq!(reduce(&mut app, Input::Enter), None);
+
+    app.github = GithubAuthState::NotConnected;
+    assert_eq!(reduce(&mut app, Input::Enter), Some(Effect::GithubConnect));
+
+    app.github = GithubAuthState::Failed("boom".to_string());
+    assert_eq!(reduce(&mut app, Input::Enter), Some(Effect::GithubConnect));
+
+    app.github = GithubAuthState::Connected {
+        login: "octocat".to_string(),
+        gh_cli: false,
+    };
+    assert_eq!(reduce(&mut app, Input::Enter), None);
+}
+
+#[test]
+fn settings_d_disconnects_only_when_connected() {
+    let mut app = app_with(1);
+    open_settings(&mut app);
+
+    app.github = GithubAuthState::NotConnected;
+    assert_eq!(reduce(&mut app, Input::Char('d')), None);
+
+    app.github = GithubAuthState::Connected {
+        login: "octocat".to_string(),
+        gh_cli: false,
+    };
+    assert_eq!(
+        reduce(&mut app, Input::Char('d')),
+        Some(Effect::GithubDisconnect)
+    );
+}

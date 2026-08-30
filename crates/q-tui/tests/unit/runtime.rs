@@ -144,7 +144,8 @@ fn mouse_click_selects_tab_and_opens_create_dialog() {
         &mut app,
         &mut clipboard,
         &mut queue_path.clone(),
-        &mut QueueSync::new(&queue_path)
+        &mut QueueSync::new(&queue_path),
+        &std::sync::mpsc::channel().0
     )
     .unwrap());
     assert_eq!(app.active_tab_id, target);
@@ -161,7 +162,8 @@ fn mouse_click_selects_tab_and_opens_create_dialog() {
         &mut app,
         &mut clipboard,
         &mut queue_path.clone(),
-        &mut QueueSync::new(&queue_path)
+        &mut QueueSync::new(&queue_path),
+        &std::sync::mpsc::channel().0
     )
     .unwrap());
     assert!(app.tab_dialog.is_some());
@@ -199,6 +201,7 @@ fn left_click_focuses_prompt_and_composer() {
         &mut clipboard,
         &mut queue_path.clone(),
         &mut QueueSync::new(&queue_path),
+        &std::sync::mpsc::channel().0,
     )
     .unwrap();
     assert_eq!(app.focus, Pane::Queue);
@@ -216,6 +219,7 @@ fn left_click_focuses_prompt_and_composer() {
         &mut clipboard,
         &mut queue_path.clone(),
         &mut QueueSync::new(&queue_path),
+        &std::sync::mpsc::channel().0,
     )
     .unwrap();
     assert_eq!(app.focus, Pane::Composer);
@@ -246,7 +250,8 @@ fn right_click_tab_and_click_rename_opens_dialog() {
         &mut app,
         &mut clipboard,
         &mut queue_path.clone(),
-        &mut QueueSync::new(&queue_path)
+        &mut QueueSync::new(&queue_path),
+        &std::sync::mpsc::channel().0
     )
     .unwrap());
     assert_eq!(app.tab_menu.as_ref().unwrap().tab_id, target);
@@ -268,7 +273,8 @@ fn right_click_tab_and_click_rename_opens_dialog() {
         &mut app,
         &mut clipboard,
         &mut queue_path.clone(),
-        &mut QueueSync::new(&queue_path)
+        &mut QueueSync::new(&queue_path),
+        &std::sync::mpsc::channel().0
     )
     .unwrap());
     assert!(matches!(
@@ -388,6 +394,7 @@ fn wheel_scrolls_the_preview() {
         &mut clipboard,
         &mut queue_path.clone(),
         &mut QueueSync::new(&queue_path),
+        &std::sync::mpsc::channel().0,
     )
     .unwrap();
     assert_eq!(app.preview.as_ref().unwrap().scroll, 1);
@@ -398,6 +405,7 @@ fn wheel_scrolls_the_preview() {
         &mut clipboard,
         &mut queue_path.clone(),
         &mut QueueSync::new(&queue_path),
+        &std::sync::mpsc::channel().0,
     )
     .unwrap();
     assert_eq!(app.preview.as_ref().unwrap().scroll, 0);
@@ -433,6 +441,7 @@ fn clicks_are_ignored_while_the_preview_is_open() {
         &mut clipboard,
         &mut queue_path.clone(),
         &mut QueueSync::new(&queue_path),
+        &std::sync::mpsc::channel().0,
     )
     .unwrap();
 
@@ -524,6 +533,7 @@ fn clicking_a_history_result_opens_it_fullscreen() {
         &mut clipboard,
         &mut queue_path.clone(),
         &mut QueueSync::new(&queue_path),
+        &std::sync::mpsc::channel().0,
     )
     .unwrap();
 
@@ -541,6 +551,7 @@ fn clicking_a_history_result_opens_it_fullscreen() {
         &mut clipboard,
         &mut queue_path.clone(),
         &mut QueueSync::new(&queue_path),
+        &std::sync::mpsc::channel().0,
     )
     .unwrap();
 
@@ -932,6 +943,7 @@ fn inline_editor_save_error_keeps_the_unsaved_buffer_open() {
         &mut clipboard,
         &mut queue_path.clone(),
         &mut QueueSync::new(&queue_path),
+        &std::sync::mpsc::channel().0,
     )
     .unwrap());
 
@@ -1040,7 +1052,8 @@ fn clipboard_failure_does_not_remove_unpinned_prompt() {
         &mut app,
         &mut clipboard,
         &mut queue_path.clone(),
-        &mut QueueSync::new(&queue_path)
+        &mut QueueSync::new(&queue_path),
+        &std::sync::mpsc::channel().0
     )
     .unwrap());
     assert!(app.workspace.get_prompt(id).is_some());

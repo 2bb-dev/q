@@ -1,7 +1,8 @@
 use crate::app::{
-    App, CloseTabDialog, DeletePromptDialog, EditorOrigin, Effect, InfoAction, InfoMode, Input,
-    MenuItem, MenuState, Pane, PreviewSource, PromptPreview, QueueMutation, SearchDialog,
-    TabContextMenu, TabDialog, TabDialogMode, TabMenuAction, WorkspaceInfo, WorkspacesMode,
+    App, CloseTabDialog, DeletePromptDialog, EditorOrigin, Effect, GithubAuthState, InfoAction,
+    InfoMode, Input, MenuItem, MenuState, Pane, PreviewSource, PromptPreview, QueueMutation,
+    SearchDialog, TabContextMenu, TabDialog, TabDialogMode, TabMenuAction, WorkspaceInfo,
+    WorkspacesMode,
 };
 use chrono::Utc;
 use q_core::{Prompt, PromptSource, TabId};
@@ -114,17 +115,32 @@ fn reduce_menu(app: &mut App, input: Input) -> Option<Effect> {
             }
             Input::Enter => match selected {
                 MenuItem::Workspaces => return Some(Effect::OpenWorkspacesOverlay),
-                MenuItem::Settings => *menu = MenuState::Settings,
+                MenuItem::Settings => {
+                    *menu = MenuState::Settings;
+                    return Some(Effect::RefreshGithubStatus);
+                }
             },
             _ => {}
         },
-        MenuState::Settings => {
-            if matches!(input, Input::Esc) {
+        MenuState::Settings => match input {
+            Input::Esc => {
                 *menu = MenuState::Root {
                     selected: MenuItem::Settings,
                 };
             }
-        }
+            Input::Enter
+                if matches!(
+                    app.github,
+                    GithubAuthState::NotConnected | GithubAuthState::Failed(_)
+                ) =>
+            {
+                return Some(Effect::GithubConnect);
+            }
+            Input::Char('d') if matches!(app.github, GithubAuthState::Connected { .. }) => {
+                return Some(Effect::GithubDisconnect);
+            }
+            _ => {}
+        },
         MenuState::Workspaces(overlay) => {
             overlay.error.clear();
             match &mut overlay.mode {

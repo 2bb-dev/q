@@ -1,6 +1,6 @@
 use crate::app::{
-    App, EditorOrigin, InfoAction, InfoMode, MenuItem, MenuState, Pane, PromptHit, SearchHit,
-    TabHit, TabHitTarget, TabMenuAction, TabMenuHit, WorkspacesMode, WorkspacesOverlay,
+    App, EditorOrigin, GithubAuthState, InfoAction, InfoMode, MenuItem, MenuState, Pane, PromptHit,
+    SearchHit, TabHit, TabHitTarget, TabMenuAction, TabMenuHit, WorkspacesMode, WorkspacesOverlay,
 };
 use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
@@ -753,8 +753,8 @@ fn render_menu(frame: &mut Frame, app: &App, cursor_on: bool) {
             frame.render_widget(Paragraph::new(lines), inner);
         }
         MenuState::Settings => {
-            let width = area.width.saturating_sub(4).clamp(12, 44);
-            let dialog_area = centered_rect(width, 5, area);
+            let width = area.width.saturating_sub(4).clamp(12, 58);
+            let dialog_area = centered_rect(width, 8.min(area.height), area);
             let block = Block::default()
                 .title(" Settings ")
                 .borders(Borders::ALL)
@@ -762,14 +762,55 @@ fn render_menu(frame: &mut Frame, app: &App, cursor_on: bool) {
             let inner = block.inner(dialog_area);
             frame.render_widget(Clear, dialog_area);
             frame.render_widget(block, dialog_area);
-            frame.render_widget(
-                Paragraph::new(vec![
-                    Line::raw(format!("q {}", env!("CARGO_PKG_VERSION"))),
-                    Line::styled("No integrations yet.", dim()),
-                    Line::styled("Esc back", dim()),
-                ]),
-                inner,
-            );
+            let mut lines = vec![
+                Line::raw(format!("q {}", env!("CARGO_PKG_VERSION"))),
+                Line::raw(""),
+            ];
+            let hint = match &app.github {
+                GithubAuthState::Unknown | GithubAuthState::Checking => {
+                    lines.push(Line::styled("GitHub: checking...", dim()));
+                    "Esc back"
+                }
+                GithubAuthState::NotConnected => {
+                    lines.push(Line::raw("GitHub: not connected"));
+                    "Enter connect \u{b7} Esc back"
+                }
+                GithubAuthState::Connecting {
+                    user_code,
+                    verification_uri,
+                } => {
+                    lines.push(Line::raw("GitHub: waiting for authorization"));
+                    lines.push(Line::from(vec![
+                        Span::styled("Enter code ", dim()),
+                        Span::styled(
+                            user_code.clone(),
+                            Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
+                        ),
+                        Span::styled(" at ", dim()),
+                        Span::raw(verification_uri.clone()),
+                    ]));
+                    "Esc back"
+                }
+                GithubAuthState::Connected { login, gh_cli } => {
+                    let source = if *gh_cli { " (via gh CLI)" } else { "" };
+                    lines.push(Line::raw(format!("GitHub: connected as {login}{source}")));
+                    if *gh_cli {
+                        "Esc back"
+                    } else {
+                        "d disconnect \u{b7} Esc back"
+                    }
+                }
+                GithubAuthState::Failed(error) => {
+                    lines.push(Line::styled(
+                        format!("GitHub: {error}"),
+                        Style::default().fg(Color::Red),
+                    ));
+                    "Enter retry \u{b7} Esc back"
+                }
+            };
+            lines.push(Line::raw(""));
+            lines.push(Line::styled(hint, dim()));
+            frame.render_widget(Paragraph::new(lines), inner);
         }
         MenuState::Workspaces(overlay) => render_workspaces_overlay(frame, overlay, cursor_on),
     }
