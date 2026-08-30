@@ -258,6 +258,72 @@ struct OrgResponse {
     login: String,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+pub struct RepoSummary {
+    pub full_name: String,
+    pub clone_url: String,
+    #[serde(default)]
+    pub topics: Vec<String>,
+}
+
+/// Repositories the user can access that hold q workspaces (tagged with
+/// the workspace topic).
+pub fn list_workspace_repos(token: &str) -> Result<Vec<RepoSummary>, GithubError> {
+    let response = ureq::get("https://api.github.com/user/repos")
+        .query("per_page", "100")
+        .query("sort", "updated")
+        .set("Accept", "application/vnd.github+json")
+        .set("Authorization", &format!("Bearer {token}"))
+        .set("User-Agent", USER_AGENT)
+        .call()?;
+    let repos: Vec<RepoSummary> = response.into_json()?;
+    Ok(repos
+        .into_iter()
+        .filter(|repo| repo.topics.iter().any(|topic| topic == WORKSPACE_TOPIC))
+        .collect())
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct RepositoryInvitation {
+    pub id: u64,
+    pub repository: InvitationRepo,
+    #[serde(default)]
+    pub inviter: Option<InvitationInviter>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct InvitationRepo {
+    pub full_name: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct InvitationInviter {
+    pub login: String,
+}
+
+/// Pending repository invitations for the token's user.
+pub fn list_repo_invitations(token: &str) -> Result<Vec<RepositoryInvitation>, GithubError> {
+    let response = ureq::get("https://api.github.com/user/repository_invitations")
+        .set("Accept", "application/vnd.github+json")
+        .set("Authorization", &format!("Bearer {token}"))
+        .set("User-Agent", USER_AGENT)
+        .call()?;
+    Ok(response.into_json()?)
+}
+
+/// Accepts a pending repository invitation.
+pub fn accept_repo_invitation(token: &str, id: u64) -> Result<(), GithubError> {
+    ureq::request(
+        "PATCH",
+        &format!("https://api.github.com/user/repository_invitations/{id}"),
+    )
+    .set("Accept", "application/vnd.github+json")
+    .set("Authorization", &format!("Bearer {token}"))
+    .set("User-Agent", USER_AGENT)
+    .call()?;
+    Ok(())
+}
+
 /// Logins of the organizations the token's user belongs to.
 pub fn list_org_logins(token: &str) -> Result<Vec<String>, GithubError> {
     let response = ureq::get("https://api.github.com/user/orgs")

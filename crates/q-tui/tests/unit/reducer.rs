@@ -981,3 +981,85 @@ fn team_workspaces_offer_no_convert_action() {
     };
     assert_eq!(info.action, InfoAction::Delete);
 }
+
+// --- Connect team queue ---
+
+use crate::app::{ConnectState, PendingInvitation, RemoteRepo};
+
+fn connect_ready(app: &mut App) {
+    let Some(MenuState::Workspaces(overlay)) = app.menu.as_mut() else {
+        panic!("workspaces overlay expected");
+    };
+    overlay.mode = WorkspacesMode::Connect(ConnectState::Ready {
+        invitations: vec![PendingInvitation {
+            id: 42,
+            full_name: "2bb-dev/q-ws-crew".to_string(),
+            inviter: Some("octocat".to_string()),
+        }],
+        repos: vec![RemoteRepo {
+            full_name: "2bb-dev/q-ws-infra".to_string(),
+            clone_url: "https://github.com/2bb-dev/q-ws-infra.git".to_string(),
+        }],
+        selected: 0,
+    });
+}
+
+#[test]
+fn c_opens_the_connect_dialog_and_requests_the_list() {
+    let mut app = app_with(1);
+    open_workspaces_with(&mut app, &["personal"]);
+    assert_eq!(
+        reduce(&mut app, Input::Char('c')),
+        Some(Effect::OpenConnect)
+    );
+    let Some(MenuState::Workspaces(overlay)) = &app.menu else {
+        panic!("workspaces overlay expected");
+    };
+    assert_eq!(overlay.mode, WorkspacesMode::Connect(ConnectState::Loading));
+}
+
+#[test]
+fn enter_on_an_invitation_accepts_it() {
+    let mut app = app_with(1);
+    open_workspaces_with(&mut app, &["personal"]);
+    reduce(&mut app, Input::Char('c'));
+    connect_ready(&mut app);
+
+    assert_eq!(
+        reduce(&mut app, Input::Enter),
+        Some(Effect::AcceptInvitation(42))
+    );
+    let Some(MenuState::Workspaces(overlay)) = &app.menu else {
+        panic!("workspaces overlay expected");
+    };
+    assert_eq!(overlay.mode, WorkspacesMode::Connect(ConnectState::Working));
+}
+
+#[test]
+fn enter_on_a_repo_requests_the_clone() {
+    let mut app = app_with(1);
+    open_workspaces_with(&mut app, &["personal"]);
+    reduce(&mut app, Input::Char('c'));
+    connect_ready(&mut app);
+
+    reduce(&mut app, Input::Down);
+    assert_eq!(
+        reduce(&mut app, Input::Enter),
+        Some(Effect::ConnectRepo {
+            full_name: "2bb-dev/q-ws-infra".to_string(),
+            clone_url: "https://github.com/2bb-dev/q-ws-infra.git".to_string(),
+        })
+    );
+}
+
+#[test]
+fn esc_returns_from_connect_to_the_list() {
+    let mut app = app_with(1);
+    open_workspaces_with(&mut app, &["personal"]);
+    reduce(&mut app, Input::Char('c'));
+    reduce(&mut app, Input::Esc);
+    let Some(MenuState::Workspaces(overlay)) = &app.menu else {
+        panic!("workspaces overlay expected");
+    };
+    assert_eq!(overlay.mode, WorkspacesMode::List);
+}

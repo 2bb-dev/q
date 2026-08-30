@@ -126,6 +126,12 @@ pub enum Effect {
         dir: PathBuf,
         org: Option<String>,
     },
+    OpenConnect,
+    AcceptInvitation(u64),
+    ConnectRepo {
+        full_name: String,
+        clone_url: String,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -169,10 +175,52 @@ pub struct WorkspaceEntry {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RemoteRepo {
+    pub full_name: String,
+    pub clone_url: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PendingInvitation {
+    pub id: u64,
+    pub full_name: String,
+    pub inviter: Option<String>,
+}
+
+/// "Connect team queue": pending invitations and connectable repos.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ConnectState {
+    Loading,
+    Ready {
+        invitations: Vec<PendingInvitation>,
+        repos: Vec<RemoteRepo>,
+        selected: usize,
+    },
+    /// An accept or clone is running in the background.
+    Working,
+}
+
+impl ConnectState {
+    pub fn len(&self) -> usize {
+        match self {
+            ConnectState::Ready {
+                invitations, repos, ..
+            } => invitations.len() + repos.len(),
+            _ => 0,
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WorkspacesMode {
     List,
     Create { value: String, team: bool },
     Info(WorkspaceInfo),
+    Connect(ConnectState),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

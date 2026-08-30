@@ -1,6 +1,6 @@
 use crate::app::{
-    App, EditorOrigin, Effect, GithubAuthState, InfoMode, MenuState, QueueMutation, WorkspaceEntry,
-    WorkspacesMode,
+    App, ConnectState, EditorOrigin, Effect, GithubAuthState, InfoMode, MenuState,
+    PendingInvitation, QueueMutation, RemoteRepo, WorkspaceEntry, WorkspacesMode,
 };
 use crate::reducer::reduce;
 use crate::render::draw;
@@ -470,6 +470,12 @@ enum RuntimeEvent {
     SyncDone {
         error: Option<String>,
     },
+    /// Pending invitations and connectable repos arrived.
+    ConnectList(std::result::Result<(Vec<PendingInvitation>, Vec<RemoteRepo>), String>),
+    /// An invitation was accepted (the connect list is refetched).
+    InvitationAccepted(std::result::Result<(), String>),
+    /// A repo clone finished.
+    RepoConnected(std::result::Result<String, String>),
 }
 
 fn apply_runtime_event(app: &mut App, event: RuntimeEvent, workspace_dir: &Path) {
@@ -512,6 +518,59 @@ fn apply_runtime_event(app: &mut App, event: RuntimeEvent, workspace_dir: &Path)
             }
         }
         RuntimeEvent::SyncDone { .. } => {}
+        RuntimeEvent::ConnectList(result) => {
+            let Some(MenuState::Workspaces(overlay)) = app.menu.as_mut() else {
+                return;
+            };
+            if !matches!(overlay.mode, WorkspacesMode::Connect(_)) {
+                return;
+            }
+            match result {
+                Ok((invitations, repos)) => {
+                    overlay.mode = WorkspacesMode::Connect(ConnectState::Ready {
+                        invitations,
+                        repos,
+                        selected: 0,
+                    });
+                }
+                Err(error) => {
+                    overlay.mode = WorkspacesMode::List;
+                    overlay.error = error;
+                }
+            }
+        }
+        RuntimeEvent::InvitationAccepted(result) => {
+            let Some(MenuState::Workspaces(overlay)) = app.menu.as_mut() else {
+                return;
+            };
+            if !matches!(overlay.mode, WorkspacesMode::Connect(_)) {
+                return;
+            }
+            match result {
+                Ok(()) => {
+                    app.status = "invitation accepted".to_string();
+                    overlay.mode = WorkspacesMode::Connect(ConnectState::Loading);
+                }
+                Err(error) => {
+                    overlay.mode = WorkspacesMode::List;
+                    overlay.error = error;
+                }
+            }
+        }
+        RuntimeEvent::RepoConnected(result) => match result {
+            Ok(full_name) => {
+                if let Ok(entries) = workspace_entries(workspace_dir) {
+                    app.open_workspaces(entries);
+                }
+                app.status = format!("connected {full_name}");
+            }
+            Err(error) => {
+                if let Some(MenuState::Workspaces(overlay)) = app.menu.as_mut() {
+                    overlay.mode = WorkspacesMode::List;
+                    overlay.error = error;
+                }
+            }
+        },
         RuntimeEvent::Converted { result } => match result {
             Ok(full_name) => {
                 if let Ok(entries) = workspace_entries(workspace_dir) {
@@ -669,6 +728,48 @@ fn handle_event(
         Some(Effect::ConvertToTeam { dir, org }) => {
             spawn_convert_to_team(github_tx.clone(), dir, org);
         }
+        Some(Effect::OpenConnect) => {
+            let tx = github_tx.clone();
+            let dir = workspace_dir.clone();
+            std::thread::spawn(move || fetch_connect_list(&tx, &dir));
+        }
+        Some(Effect::AcceptInvitation(id)) => {
+            let tx = github_tx.clone();
+            let dir = workspace_dir.clone();
+            std::thread::spawn(move || {
+                let result = (|| -> std::result::Result<(), String> {
+                    let token = require_token()?;
+                    q_platform::github::accept_repo_invitation(&token, id)
+                        .map_err(|error| error.to_string())
+                })();
+                let accepted = result.is_ok();
+                let _ = tx.send(RuntimeEvent::InvitationAccepted(result));
+                if accepted {
+                    // Refresh so the accepted repo becomes connectable.
+                    fetch_connect_list(&tx, &dir);
+                }
+            });
+        }
+        Some(Effect::ConnectRepo {
+            full_name,
+            clone_url,
+        }) => {
+            let tx = github_tx.clone();
+            let root = workspaces_root(workspace_dir);
+            std::thread::spawn(move || {
+                let result = (|| -> std::result::Result<String, String> {
+                    let token = require_token()?;
+                    let target = root.join(full_name.replace('/', "-"));
+                    if target.exists() {
+                        return Err(format!("already connected: {full_name}"));
+                    }
+                    q_platform::git::clone_repo(&clone_url, &target, &token)
+                        .map_err(|error| error.to_string())?;
+                    Ok(full_name)
+                })();
+                let _ = tx.send(RuntimeEvent::RepoConnected(result));
+            });
+        }
         Some(Effect::RefreshGithubStatus) => {
             if !matches!(app.github, GithubAuthState::Connecting { .. }) {
                 app.github = GithubAuthState::Checking;
@@ -722,6 +823,47 @@ fn spawn_github_status_refresh(tx: Sender<RuntimeEvent>) {
 
 fn spawn_github_connect(tx: Sender<RuntimeEvent>) {
     std::thread::spawn(move || run_device_flow(&tx));
+}
+
+fn require_token() -> std::result::Result<String, String> {
+    match q_platform::github::resolve_token() {
+        Ok(Some((token, _))) => Ok(token),
+        Ok(None) => Err("connect GitHub in Settings first".to_string()),
+        Err(error) => Err(error.to_string()),
+    }
+}
+
+/// Fetches pending invitations and connectable workspace repos, filtering
+/// out repos that are already connected locally.
+fn fetch_connect_list(tx: &Sender<RuntimeEvent>, workspace_dir: &Path) {
+    let result = (|| -> std::result::Result<(Vec<PendingInvitation>, Vec<RemoteRepo>), String> {
+        let token = require_token()?;
+        let invitations = q_platform::github::list_repo_invitations(&token)
+            .map_err(|error| error.to_string())?
+            .into_iter()
+            .map(|invitation| PendingInvitation {
+                id: invitation.id,
+                full_name: invitation.repository.full_name,
+                inviter: invitation.inviter.map(|inviter| inviter.login),
+            })
+            .collect();
+        let connected: Vec<String> = q_core::storage::list_dirs(&workspaces_root(workspace_dir))
+            .map_err(|error| error.to_string())?
+            .into_iter()
+            .filter_map(|(dir, _)| q_platform::git::origin_url(&dir))
+            .collect();
+        let repos = q_platform::github::list_workspace_repos(&token)
+            .map_err(|error| error.to_string())?
+            .into_iter()
+            .filter(|repo| !connected.contains(&repo.clone_url))
+            .map(|repo| RemoteRepo {
+                full_name: repo.full_name,
+                clone_url: repo.clone_url,
+            })
+            .collect();
+        Ok((invitations, repos))
+    })();
+    let _ = tx.send(RuntimeEvent::ConnectList(result));
 }
 
 fn spawn_fetch_owners(tx: Sender<RuntimeEvent>) {
