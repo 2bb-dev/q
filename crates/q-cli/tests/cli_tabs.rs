@@ -14,8 +14,19 @@ fn workspace_with_two_tabs(dir: &TempDir) -> (q_core::TabId, q_core::TabId) {
     let first = workspace.first_tab_id();
     workspace.rename_tab(first, "backend").unwrap();
     let second = workspace.create_tab("website").unwrap();
-    storage::save(&dir.path().join("queue.json"), &workspace).unwrap();
+    let ws_dir = storage::init_dir(&dir.path().join("workspaces"), "Personal").unwrap();
+    storage::save_dir(&ws_dir, &workspace).unwrap();
     (first, second)
+}
+
+fn workspace_dir(dir: &TempDir) -> std::path::PathBuf {
+    let root = dir.path().join("workspaces");
+    std::fs::read_dir(&root)
+        .unwrap()
+        .filter_map(|entry| entry.ok())
+        .map(|entry| entry.path())
+        .find(|path| path.join("workspace.json").exists())
+        .unwrap()
 }
 
 #[test]
@@ -92,12 +103,12 @@ fn unknown_tab_error_lists_available_names() {
 fn id_based_commands_find_prompts_globally_without_tab() {
     let dir = TempDir::new().unwrap();
     let (_, website) = workspace_with_two_tabs(&dir);
-    let path = dir.path().join("queue.json");
-    let mut workspace = storage::load(&path).unwrap();
+    let path = workspace_dir(&dir);
+    let mut workspace = storage::load_dir(&path).unwrap();
     let prompt = Prompt::new("global target").unwrap();
     let id = prompt.id;
     workspace.add_prompt(website, prompt).unwrap();
-    storage::save(&path, &workspace).unwrap();
+    storage::save_dir(&path, &workspace).unwrap();
 
     q(&dir).args(["pin", &id.to_string()]).assert().success();
     q(&dir)

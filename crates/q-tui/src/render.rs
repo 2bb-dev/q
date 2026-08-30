@@ -164,7 +164,7 @@ fn render_queue(frame: &mut Frame, app: &mut App, area: Rect) {
     let prompts: Vec<_> = app
         .visible_prompts()
         .into_iter()
-        .map(|prompt| (app.source_card_text(prompt.source()), prompt.pinned))
+        .map(|prompt| (app.source_card_text(prompt.source()), prompt.pinned()))
         .collect();
     let mut lines = Vec::new();
     let mut hits = Vec::new();

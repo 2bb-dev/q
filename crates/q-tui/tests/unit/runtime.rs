@@ -120,7 +120,7 @@ fn shifted_or_alt_enter_inserts_newline() {
 #[test]
 fn mouse_click_selects_tab_and_opens_create_dialog() {
     let dir = tempfile::TempDir::new().unwrap();
-    let queue_path = dir.path().join("queue.json");
+    let queue_path = q_core::storage::init_dir(dir.path(), "test").unwrap();
     let mut workspace = q_core::Workspace::new();
     let initial = workspace.first_tab_id();
     let target = workspace.create_tab("work").unwrap();
@@ -156,7 +156,7 @@ fn mouse_click_selects_tab_and_opens_create_dialog() {
 #[test]
 fn left_click_focuses_prompt_and_composer() {
     let dir = tempfile::TempDir::new().unwrap();
-    let queue_path = dir.path().join("queue.json");
+    let queue_path = q_core::storage::init_dir(dir.path(), "test").unwrap();
     let mut workspace = q_core::Workspace::new();
     let tab = workspace.first_tab_id();
     workspace
@@ -196,7 +196,7 @@ fn left_click_focuses_prompt_and_composer() {
 #[test]
 fn right_click_tab_and_click_rename_opens_dialog() {
     let dir = tempfile::TempDir::new().unwrap();
-    let queue_path = dir.path().join("queue.json");
+    let queue_path = q_core::storage::init_dir(dir.path(), "test").unwrap();
     let mut workspace = q_core::Workspace::new();
     let target = workspace.create_tab("work").unwrap();
     let mut app = App::new(workspace);
@@ -317,7 +317,7 @@ fn preview_keys_map_to_scrolling_and_closing() {
 #[test]
 fn wheel_scrolls_the_preview() {
     let dir = tempfile::TempDir::new().unwrap();
-    let queue_path = dir.path().join("queue.json");
+    let queue_path = q_core::storage::init_dir(dir.path(), "test").unwrap();
     let mut workspace = q_core::Workspace::new();
     let tab = workspace.first_tab_id();
     workspace
@@ -362,7 +362,7 @@ fn wheel_scrolls_the_preview() {
 #[test]
 fn clicks_are_ignored_while_the_preview_is_open() {
     let dir = tempfile::TempDir::new().unwrap();
-    let queue_path = dir.path().join("queue.json");
+    let queue_path = q_core::storage::init_dir(dir.path(), "test").unwrap();
     let mut workspace = q_core::Workspace::new();
     let tab = workspace.first_tab_id();
     workspace
@@ -446,7 +446,7 @@ fn search_keys_filter_navigate_and_close() {
 #[test]
 fn clicking_a_history_result_opens_it_fullscreen() {
     let dir = tempfile::TempDir::new().unwrap();
-    let queue_path = dir.path().join("queue.json");
+    let queue_path = q_core::storage::init_dir(dir.path(), "test").unwrap();
     let mut workspace = q_core::Workspace::new();
     let tab = workspace.first_tab_id();
     workspace
@@ -562,7 +562,7 @@ fn concurrent_add_transactions_preserve_both_prompts() {
     use std::sync::{Arc, Barrier};
 
     let dir = tempfile::TempDir::new().unwrap();
-    let queue_path = dir.path().join("queue.json");
+    let queue_path = q_core::storage::init_dir(dir.path(), "test").unwrap();
     let barrier = Arc::new(Barrier::new(3));
     let mut handles = Vec::new();
 
@@ -582,7 +582,7 @@ fn concurrent_add_transactions_preserve_both_prompts() {
         handle.join().unwrap();
     }
 
-    let workspace = q_core::storage::load(&queue_path).unwrap();
+    let workspace = q_core::storage::load_dir(&queue_path).unwrap();
     let texts: Vec<_> = workspace.tabs()[0]
         .queue()
         .iter()
@@ -596,15 +596,15 @@ fn concurrent_add_transactions_preserve_both_prompts() {
 #[test]
 fn close_tab_mutation_is_persisted() {
     let dir = tempfile::TempDir::new().unwrap();
-    let queue_path = dir.path().join("queue.json");
+    let queue_path = q_core::storage::init_dir(dir.path(), "test").unwrap();
     let mut workspace = q_core::Workspace::new();
     let closed = workspace.create_tab("closed").unwrap();
-    q_core::storage::save(&queue_path, &workspace).unwrap();
+    q_core::storage::save_dir(&queue_path, &workspace).unwrap();
 
     let outcome = commit_mutation(&queue_path, &QueueMutation::CloseTab(closed)).unwrap();
 
     assert!(matches!(outcome, MutationOutcome::Committed(_)));
-    let persisted = q_core::storage::load(&queue_path).unwrap();
+    let persisted = q_core::storage::load_dir(&queue_path).unwrap();
     assert!(persisted.tab(closed).is_none());
     assert_eq!(persisted.tabs().len(), 1);
 }
@@ -612,7 +612,7 @@ fn close_tab_mutation_is_persisted() {
 #[test]
 fn stale_mutation_returns_latest_queue_as_conflict() {
     let dir = tempfile::TempDir::new().unwrap();
-    let queue_path = dir.path().join("queue.json");
+    let queue_path = q_core::storage::init_dir(dir.path(), "test").unwrap();
     let prompt = q_core::Prompt::new("remove me").unwrap();
     let id = prompt.id;
     let expected_source = prompt.source().clone();
@@ -629,7 +629,7 @@ fn stale_mutation_returns_latest_queue_as_conflict() {
     let outcome = commit_mutation(&queue_path, &removal).unwrap();
 
     assert!(matches!(outcome, MutationOutcome::Rejected(_, _)));
-    assert!(q_core::storage::load(&queue_path)
+    assert!(q_core::storage::load_dir(&queue_path)
         .unwrap()
         .get_prompt(id)
         .is_none());
@@ -638,17 +638,17 @@ fn stale_mutation_returns_latest_queue_as_conflict() {
 #[test]
 fn stale_inline_edit_and_remove_reject_the_latest_source() {
     let dir = tempfile::TempDir::new().unwrap();
-    let queue_path = dir.path().join("queue.json");
+    let queue_path = q_core::storage::init_dir(dir.path(), "test").unwrap();
     let mut workspace = q_core::Workspace::new();
     let tab = workspace.first_tab_id();
     let prompt = q_core::Prompt::new("before").unwrap();
     let id = prompt.id;
     let stale_source = prompt.source().clone();
     workspace.add_prompt(tab, prompt).unwrap();
-    q_core::storage::save(&queue_path, &workspace).unwrap();
+    q_core::storage::save_dir(&queue_path, &workspace).unwrap();
 
     workspace.edit_prompt_inline(id, "newer").unwrap();
-    q_core::storage::save(&queue_path, &workspace).unwrap();
+    q_core::storage::save_dir(&queue_path, &workspace).unwrap();
 
     let edit = commit_mutation(
         &queue_path,
@@ -674,7 +674,7 @@ fn stale_inline_edit_and_remove_reject_the_latest_source() {
     assert!(matches!(edit, MutationOutcome::Rejected(_, _)));
     assert!(matches!(remove, MutationOutcome::Rejected(_, _)));
     assert_eq!(
-        q_core::storage::load(&queue_path)
+        q_core::storage::load_dir(&queue_path)
             .unwrap()
             .get_prompt(id)
             .unwrap()
@@ -686,16 +686,16 @@ fn stale_inline_edit_and_remove_reject_the_latest_source() {
 #[test]
 fn stale_pop_rejects_a_newly_pinned_prompt() {
     let dir = tempfile::TempDir::new().unwrap();
-    let queue_path = dir.path().join("queue.json");
+    let queue_path = q_core::storage::init_dir(dir.path(), "test").unwrap();
     let mut workspace = q_core::Workspace::new();
     let tab = workspace.first_tab_id();
     let prompt = q_core::Prompt::new("body").unwrap();
     let id = prompt.id;
     let source = prompt.source().clone();
     workspace.add_prompt(tab, prompt).unwrap();
-    q_core::storage::save(&queue_path, &workspace).unwrap();
+    q_core::storage::save_dir(&queue_path, &workspace).unwrap();
     workspace.set_prompt_pinned(id, true).unwrap();
-    q_core::storage::save(&queue_path, &workspace).unwrap();
+    q_core::storage::save_dir(&queue_path, &workspace).unwrap();
 
     let outcome = commit_mutation(
         &queue_path,
@@ -709,19 +709,17 @@ fn stale_pop_rejects_a_newly_pinned_prompt() {
     .unwrap();
 
     assert!(matches!(outcome, MutationOutcome::Rejected(_, _)));
-    assert!(
-        q_core::storage::load(&queue_path)
-            .unwrap()
-            .get_prompt(id)
-            .unwrap()
-            .pinned
-    );
+    assert!(q_core::storage::load_dir(&queue_path)
+        .unwrap()
+        .get_prompt(id)
+        .unwrap()
+        .pinned());
 }
 
 #[test]
 fn stale_external_pop_rejects_content_changed_after_copy() {
     let dir = tempfile::TempDir::new().unwrap();
-    let queue_path = dir.path().join("queue.json");
+    let queue_path = q_core::storage::init_dir(dir.path(), "test").unwrap();
     let source_path = dir.path().join("live.md");
     std::fs::write(&source_path, "copied version").unwrap();
     let mut workspace = q_core::Workspace::new();
@@ -730,7 +728,7 @@ fn stale_external_pop_rejects_content_changed_after_copy() {
     let id = prompt.id;
     let source = prompt.source().clone();
     workspace.add_prompt(tab, prompt).unwrap();
-    q_core::storage::save(&queue_path, &workspace).unwrap();
+    q_core::storage::save_dir(&queue_path, &workspace).unwrap();
     std::fs::write(&source_path, "new version").unwrap();
 
     let outcome = commit_mutation(
@@ -745,7 +743,7 @@ fn stale_external_pop_rejects_content_changed_after_copy() {
     .unwrap();
 
     assert!(matches!(outcome, MutationOutcome::Rejected(_, _)));
-    assert!(q_core::storage::load(&queue_path)
+    assert!(q_core::storage::load_dir(&queue_path)
         .unwrap()
         .get_prompt(id)
         .is_some());
@@ -754,7 +752,7 @@ fn stale_external_pop_rejects_content_changed_after_copy() {
 #[test]
 fn external_refresh_preserves_composer_state() {
     let dir = tempfile::TempDir::new().unwrap();
-    let queue_path = dir.path().join("queue.json");
+    let queue_path = q_core::storage::init_dir(dir.path(), "test").unwrap();
     let mut app = App::new(q_core::Queue::new());
     app.composer.set_text("local draft");
     app.focus = Pane::Composer;
@@ -765,7 +763,7 @@ fn external_refresh_preserves_composer_state() {
     external
         .add_prompt(tab_id, q_core::Prompt::new("external prompt").unwrap())
         .unwrap();
-    q_core::storage::save(&queue_path, &external).unwrap();
+    q_core::storage::save_dir(&queue_path, &external).unwrap();
     sync.last_check = Instant::now() - SYNC_INTERVAL;
     sync.refresh_if_due(&mut app, &queue_path);
 
@@ -777,15 +775,15 @@ fn external_refresh_preserves_composer_state() {
 #[test]
 fn inline_edit_commit_preserves_record_metadata_and_adds_typed_history() {
     let dir = tempfile::TempDir::new().unwrap();
-    let queue_path = dir.path().join("queue.json");
+    let queue_path = q_core::storage::init_dir(dir.path(), "test").unwrap();
     let mut workspace = q_core::Workspace::new();
     let tab = workspace.first_tab_id();
     let mut prompt = q_core::Prompt::new("before").unwrap();
-    prompt.pinned = true;
+    prompt.set_pinned(true);
     let id = prompt.id;
     let created_at = prompt.created_at;
     workspace.add_prompt(tab, prompt).unwrap();
-    q_core::storage::save(&queue_path, &workspace).unwrap();
+    q_core::storage::save_dir(&queue_path, &workspace).unwrap();
 
     let mutation = QueueMutation::EditInline {
         id,
@@ -797,10 +795,10 @@ fn inline_edit_commit_preserves_record_metadata_and_adds_typed_history() {
     };
     let outcome = commit_mutation(&queue_path, &mutation).unwrap();
     assert!(matches!(outcome, MutationOutcome::Committed(_)));
-    let saved = q_core::storage::load(&queue_path).unwrap();
+    let saved = q_core::storage::load_dir(&queue_path).unwrap();
     let edited = saved.get_prompt(id).unwrap();
     assert_eq!(edited.inline_text(), Some("after"));
-    assert!(edited.pinned);
+    assert!(edited.pinned());
     assert_eq!(edited.created_at, created_at);
     assert!(saved
         .history()
@@ -815,14 +813,14 @@ fn inline_edit_commit_preserves_record_metadata_and_adds_typed_history() {
 #[test]
 fn successful_inline_editor_save_returns_to_queue() {
     let dir = tempfile::TempDir::new().unwrap();
-    let queue_path = dir.path().join("queue.json");
+    let queue_path = q_core::storage::init_dir(dir.path(), "test").unwrap();
     let mut workspace = q_core::Workspace::new();
     let tab = workspace.first_tab_id();
     let prompt = q_core::Prompt::new("before").unwrap();
     let id = prompt.id;
     let source = prompt.source().clone();
     workspace.add_prompt(tab, prompt).unwrap();
-    q_core::storage::save(&queue_path, &workspace).unwrap();
+    q_core::storage::save_dir(&queue_path, &workspace).unwrap();
     let mut app = App::new(workspace);
     app.open_editor_for_source(source.clone(), Some(id))
         .unwrap();
@@ -879,7 +877,7 @@ fn inline_editor_save_error_keeps_the_unsaved_buffer_open() {
 #[test]
 fn serialized_external_editor_saves_reject_the_stale_writer() {
     let dir = tempfile::TempDir::new().unwrap();
-    let queue_path = dir.path().join("queue.json");
+    let queue_path = q_core::storage::init_dir(dir.path(), "test").unwrap();
     let source_path = dir.path().join("document.md");
     std::fs::write(&source_path, "original").unwrap();
     let mut workspace = q_core::Workspace::new();
@@ -888,7 +886,7 @@ fn serialized_external_editor_saves_reject_the_stale_writer() {
     let source = prompt.source().clone();
     let id = prompt.id;
     workspace.add_prompt(tab, prompt).unwrap();
-    q_core::storage::save(&queue_path, &workspace).unwrap();
+    q_core::storage::save_dir(&queue_path, &workspace).unwrap();
     let mut first = App::new(workspace.clone());
     let mut second = App::new(workspace);
     first
@@ -911,7 +909,7 @@ fn serialized_external_editor_saves_reject_the_stale_writer() {
 #[test]
 fn remove_commit_preserves_typed_history_and_external_source_file() {
     let dir = tempfile::TempDir::new().unwrap();
-    let queue_path = dir.path().join("queue.json");
+    let queue_path = q_core::storage::init_dir(dir.path(), "test").unwrap();
     let source_path = dir.path().join("source.md");
     std::fs::write(&source_path, "body").unwrap();
     let mut workspace = q_core::Workspace::new();
@@ -920,7 +918,7 @@ fn remove_commit_preserves_typed_history_and_external_source_file() {
     let id = prompt.id;
     let source = prompt.source().clone();
     workspace.add_prompt(tab, prompt).unwrap();
-    q_core::storage::save(&queue_path, &workspace).unwrap();
+    q_core::storage::save_dir(&queue_path, &workspace).unwrap();
 
     commit_mutation(
         &queue_path,
@@ -932,7 +930,7 @@ fn remove_commit_preserves_typed_history_and_external_source_file() {
         },
     )
     .unwrap();
-    let saved = q_core::storage::load(&queue_path).unwrap();
+    let saved = q_core::storage::load_dir(&queue_path).unwrap();
     assert!(saved.get_prompt(id).is_none());
     assert!(saved
         .history()
@@ -941,7 +939,7 @@ fn remove_commit_preserves_typed_history_and_external_source_file() {
     assert_eq!(std::fs::read_to_string(source_path).unwrap(), "body");
 
     commit_mutation(&queue_path, &QueueMutation::ForgetHistory(source.clone())).unwrap();
-    let forgotten = q_core::storage::load(&queue_path).unwrap();
+    let forgotten = q_core::storage::load_dir(&queue_path).unwrap();
     assert!(!forgotten
         .history()
         .iter()
@@ -960,20 +958,20 @@ fn clipboard_failure_does_not_remove_unpinned_prompt() {
     }
 
     let dir = tempfile::TempDir::new().unwrap();
-    let queue_path = dir.path().join("queue.json");
+    let queue_path = q_core::storage::init_dir(dir.path(), "test").unwrap();
     let mut workspace = q_core::Workspace::new();
     let tab = workspace.first_tab_id();
     let prompt = q_core::Prompt::new("keep me").unwrap();
     let id = prompt.id;
     workspace.add_prompt(tab, prompt).unwrap();
-    q_core::storage::save(&queue_path, &workspace).unwrap();
+    q_core::storage::save_dir(&queue_path, &workspace).unwrap();
     let mut app = App::new(workspace);
     let mut clipboard = FailingClipboard;
 
     let event = Event::Key(key(KeyCode::Enter));
     assert!(!handle_event(event, &mut app, &mut clipboard, &queue_path).unwrap());
     assert!(app.workspace.get_prompt(id).is_some());
-    assert!(q_core::storage::load(&queue_path)
+    assert!(q_core::storage::load_dir(&queue_path)
         .unwrap()
         .get_prompt(id)
         .is_some());

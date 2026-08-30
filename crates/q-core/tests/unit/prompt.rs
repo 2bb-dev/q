@@ -11,7 +11,7 @@ fn new_accepts_non_empty_inline_text() {
     let prompt = Prompt::new("hello world").expect("should succeed");
     assert_eq!(prompt.inline_text(), Some("hello world"));
     assert_eq!(prompt.external_markdown_path(), None);
-    assert!(!prompt.pinned);
+    assert!(!prompt.pinned());
 }
 
 #[test]

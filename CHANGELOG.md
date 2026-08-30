@@ -5,6 +5,8 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Changed
+- **Breaking:** replaced the single `queue.json` with a directory-based workspace format under `workspaces/<id>/` with one file per tab and prompt. An existing `queue.json` (schemas 1–4) migrates automatically into a workspace named "Personal" on first run and is renamed to `queue.json.migrated`; older binaries cannot read the new layout ([#6](https://github.com/2bb-dev/q/issues/6))
+- **Breaking:** replaced the persisted `pinned` boolean with a `pinned_at` timestamp; pin state and ordering behave as before ([#6](https://github.com/2bb-dev/q/issues/6))
 - **Breaking:** bumped the `queue.json` schema to 4 for typed inline and external Markdown sources. Schemas 1–3 migrate automatically on load, but older binaries cannot read the workspace after it is next saved
 - **Breaking:** required `--tab <name>` for every `q add`, including workspaces with only one tab
 - Changed queue cards to show only the first source line, truncating long lines with a trailing ellipsis

@@ -20,7 +20,7 @@ pub fn run(id: Option<String>, next: bool, stdout: bool, tab: Option<String>) ->
             let tab_id = workspace.resolve_context_tab(tab.as_deref())?;
             workspace
                 .tab(tab_id)
-                .and_then(|tab| tab.queue().iter().find(|prompt| !prompt.pinned))
+                .and_then(|tab| tab.queue().iter().find(|prompt| !prompt.pinned()))
                 .cloned()
                 .ok_or_else(|| anyhow!("no unpinned prompts to pop"))?
         };

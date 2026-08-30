@@ -33,6 +33,20 @@ pub struct Tab {
 }
 
 impl Tab {
+    pub(crate) fn from_parts(
+        id: TabId,
+        name: String,
+        activity_at: DateTime<Utc>,
+        queue: Queue,
+    ) -> Self {
+        Self {
+            id,
+            name,
+            activity_at,
+            queue,
+        }
+    }
+
     pub fn id(&self) -> TabId {
         self.id
     }
@@ -124,6 +138,21 @@ impl Workspace {
             }],
             history: Vec::new(),
         }
+    }
+
+    /// Assembles a workspace from persisted parts. No tabs yet means a fresh
+    /// workspace, so the initial tab is created.
+    pub(crate) fn from_parts(tabs: Vec<Tab>, history: Vec<HistoryEntry>) -> Self {
+        let mut workspace = if tabs.is_empty() {
+            Self::new()
+        } else {
+            Self {
+                tabs,
+                history: Vec::new(),
+            }
+        };
+        workspace.history = history;
+        workspace
     }
 
     pub(crate) fn from_legacy_queue(mut queue: Queue, migrated_at: DateTime<Utc>) -> Self {

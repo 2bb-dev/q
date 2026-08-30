@@ -199,7 +199,7 @@ fn workspace_inline_edit_records_new_history_and_retains_old_text() {
     let mut workspace = Workspace::new();
     let tab = workspace.first_tab_id();
     let mut prompt = Prompt::new("before").unwrap();
-    prompt.pinned = true;
+    prompt.set_pinned(true);
     let id = prompt.id;
     let created_at = prompt.created_at;
     workspace.add_prompt(tab, prompt).unwrap();
@@ -209,7 +209,7 @@ fn workspace_inline_edit_records_new_history_and_retains_old_text() {
     let edited = workspace.get_prompt(id).unwrap();
     assert_eq!(edited.id, id);
     assert_eq!(edited.created_at, created_at);
-    assert!(edited.pinned);
+    assert!(edited.pinned());
     assert_eq!(edited.inline_text(), Some("after"));
     let history: Vec<_> = workspace
         .history()
@@ -379,7 +379,7 @@ fn prompt_operations_find_owning_tab_globally() {
 
     assert_eq!(workspace.resolve_prompt(&id.to_string()).unwrap(), id);
     workspace.set_prompt_pinned(id, true).unwrap();
-    assert!(workspace.get_prompt(id).unwrap().pinned);
+    assert!(workspace.get_prompt(id).unwrap().pinned());
     assert_eq!(
         workspace.remove_prompt(id).unwrap().inline_text().unwrap(),
         "global"

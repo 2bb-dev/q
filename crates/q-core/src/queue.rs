@@ -87,7 +87,7 @@ impl Queue {
             .position(|p| p.id == id)
             .ok_or_else(|| CoreError::NotFound(id.to_string()))?;
         let mut p = self.prompts.remove(pos);
-        p.pinned = pinned;
+        p.set_pinned(pinned);
         let _ = self.add(p);
         Ok(())
     }
@@ -99,7 +99,7 @@ impl Queue {
 
     /// Pop the first unpinned prompt. Returns None if all prompts are pinned.
     pub fn pop_next_unpinned(&mut self) -> Option<Prompt> {
-        let pos = self.prompts.iter().position(|p| !p.pinned)?;
+        let pos = self.prompts.iter().position(|p| !p.pinned())?;
         Some(self.prompts.remove(pos))
     }
 
@@ -108,11 +108,11 @@ impl Queue {
     }
 
     pub fn iter_pinned(&self) -> impl Iterator<Item = &Prompt> {
-        self.prompts.iter().filter(|p| p.pinned)
+        self.prompts.iter().filter(|p| p.pinned())
     }
 
     pub fn iter_unpinned(&self) -> impl Iterator<Item = &Prompt> {
-        self.prompts.iter().filter(|p| !p.pinned)
+        self.prompts.iter().filter(|p| !p.pinned())
     }
 
     /// Build a Prompt from raw text and add it to the unpinned group.
@@ -125,8 +125,8 @@ impl Queue {
     pub(crate) fn normalize(&mut self) {
         self.prompts.sort_by(|left, right| {
             right
-                .pinned
-                .cmp(&left.pinned)
+                .pinned()
+                .cmp(&left.pinned())
                 .then_with(|| right.created_at.cmp(&left.created_at))
                 .then_with(|| left.id.cmp(&right.id))
         });
@@ -142,20 +142,20 @@ impl Queue {
             .position(|p| p.id == id)
             .ok_or_else(|| CoreError::NotFound(id.to_string()))?;
 
-        let pinned = self.prompts[cur].pinned;
+        let pinned = self.prompts[cur].pinned();
         let (lo, hi) = if pinned {
             (
                 0,
                 self.prompts
                     .iter()
-                    .position(|p| !p.pinned)
+                    .position(|p| !p.pinned())
                     .unwrap_or(self.prompts.len()),
             )
         } else {
             (
                 self.prompts
                     .iter()
-                    .position(|p| !p.pinned)
+                    .position(|p| !p.pinned())
                     .unwrap_or(self.prompts.len()),
                 self.prompts.len(),
             )

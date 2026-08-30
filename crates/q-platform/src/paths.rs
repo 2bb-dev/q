@@ -26,9 +26,17 @@ pub fn app_dir() -> std::io::Result<PathBuf> {
     Ok(dir)
 }
 
-/// Path to the persisted queue JSON.
+/// Path to the legacy single-file queue JSON, kept only as a migration
+/// source for the workspace directory format.
 pub fn queue_path() -> std::io::Result<PathBuf> {
     Ok(app_dir()?.join("queue.json"))
+}
+
+/// Directory containing one subdirectory per workspace.
+pub fn workspaces_dir() -> std::io::Result<PathBuf> {
+    let dir = app_dir()?.join("workspaces");
+    std::fs::create_dir_all(&dir)?;
+    Ok(dir)
 }
 
 /// Path to the persisted provider config JSON.
